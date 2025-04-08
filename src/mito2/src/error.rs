@@ -490,14 +490,6 @@ pub enum Error {
         location: Location,
     },
 
-    #[snafu(display("Schema version doesn't match. Expect {} but gives {}", expect, actual))]
-    InvalidRegionRequestSchemaVersion {
-        expect: u64,
-        actual: u64,
-        #[snafu(implicit)]
-        location: Location,
-    },
-
     #[snafu(display(
         "Region {} is in {:?} state, which does not permit manifest updates.",
         region_id,
@@ -1023,6 +1015,12 @@ pub enum Error {
 
     #[snafu(display("Incompatible WAL provider change. This is typically caused by changing WAL provider in database config file without completely cleaning existing files. Global provider: {}, region provider: {}", global, region))]
     IncompatibleWalProviderChange { global: String, region: String },
+
+    #[snafu(display("Expected mito manifest info"))]
+    MitoManifestInfo {
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -1080,8 +1078,6 @@ impl ErrorExt for Error {
             | PartitionOutOfRange { .. }
             | ParseJobId { .. } => StatusCode::InvalidArguments,
 
-            InvalidRegionRequestSchemaVersion { .. } => StatusCode::RequestOutdated,
-
             RegionMetadataNotFound { .. }
             | Join { .. }
             | WorkerStopped { .. }
@@ -1099,7 +1095,8 @@ impl ErrorExt for Error {
             | ReadDataPart { .. }
             | CorruptedEntry { .. }
             | BuildEntry { .. }
-            | Metadata { .. } => StatusCode::Internal,
+            | Metadata { .. }
+            | MitoManifestInfo { .. } => StatusCode::Internal,
 
             OpenRegion { source, .. } => source.status_code(),
 
