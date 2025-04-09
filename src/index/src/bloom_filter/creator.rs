@@ -18,6 +18,7 @@ mod intermediate_codec;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::str;
 
 use finalize_segment::FinalizedBloomFilterStorage;
 use futures::{AsyncWrite, AsyncWriteExt, StreamExt};
@@ -244,11 +245,13 @@ impl Drop for BloomFilterCreator {
 
 #[cfg(test)]
 mod tests {
-    use fastbloom::BloomFilter;
+    // use fastbloom::BloomFilter;
+    use cuckoofilter::CuckooFilter;
     use futures::io::Cursor;
 
     use super::*;
     use crate::external_provider::MockExternalTempFileProvider;
+    use std::collections::hash_map::DefaultHasher;
 
     /// Converts a slice of bytes to a vector of `u64`.
     pub fn u64_vec_from_bytes(bytes: &[u8]) -> Vec<u64> {
@@ -308,14 +311,14 @@ mod tests {
             total_size
         );
 
-        let mut bfs = Vec::new();
+        let mut bfs: Vec<CuckooFilter<DefaultHasher>> = Vec::new();
         for segment in meta.bloom_filter_locs {
             let bloom_filter_bytes =
                 &bytes[segment.offset as usize..(segment.offset + segment.size) as usize];
-            let v = u64_vec_from_bytes(bloom_filter_bytes);
-            let bloom_filter = BloomFilter::from_vec(v)
-                .seed(&SEED)
-                .expected_items(segment.element_count as usize);
+            // let v = u64_vec_from_bytes(bloom_filter_bytes);
+            let s = str::from_utf8(&bloom_filter_bytes).unwrap();
+            let json: cuckoofilter::ExportedCuckooFilter = serde_json::from_str(&s).unwrap();
+            let bloom_filter: CuckooFilter<DefaultHasher> = CuckooFilter::from(json);
             bfs.push(bloom_filter);
         }
 
@@ -381,14 +384,14 @@ mod tests {
             total_size
         );
 
-        let mut bfs = Vec::new();
+        let mut bfs: Vec<CuckooFilter<DefaultHasher>> = Vec::new();
         for segment in meta.bloom_filter_locs {
             let bloom_filter_bytes =
                 &bytes[segment.offset as usize..(segment.offset + segment.size) as usize];
-            let v = u64_vec_from_bytes(bloom_filter_bytes);
-            let bloom_filter = BloomFilter::from_vec(v)
-                .seed(&SEED)
-                .expected_items(segment.element_count as _);
+            // let v = u64_vec_from_bytes(bloom_filter_bytes);
+            let s = str::from_utf8(&bloom_filter_bytes).unwrap();
+            let json: cuckoofilter::ExportedCuckooFilter = serde_json::from_str(&s).unwrap();
+            let bloom_filter: CuckooFilter<DefaultHasher> = CuckooFilter::from(json);
             bfs.push(bloom_filter);
         }
 

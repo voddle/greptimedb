@@ -17,9 +17,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use asynchronous_codec::{FramedRead, FramedWrite};
-use fastbloom::BloomFilter;
+use cuckoofilter::CuckooFilter;
 use futures::stream::StreamExt;
 use futures::{stream, AsyncWriteExt, Stream};
+use std::collections::hash_map::DefaultHasher;
 use snafu::ResultExt;
 
 use super::intermediate_codec::IntermediateBloomFilterCodecV1;
@@ -96,11 +97,9 @@ impl FinalizedBloomFilterStorage {
         elems: impl IntoIterator<Item = Bytes>,
         element_count: usize,
     ) -> Result<()> {
-        let mut bf = BloomFilter::with_false_pos(FALSE_POSITIVE_RATE)
-            .seed(&SEED)
-            .expected_items(element_count);
+        let mut bf = CuckooFilter::new();
         for elem in elems.into_iter() {
-            bf.insert(&elem);
+            bf.add(&elem);
         }
 
         let fbf = FinalizedBloomFilterSegment::from(bf, element_count);
@@ -226,8 +225,8 @@ pub struct FinalizedBloomFilterSegment {
 }
 
 impl FinalizedBloomFilterSegment {
-    fn from(bf: BloomFilter, elem_count: usize) -> Self {
-        let bf_slice = bf.as_slice();
+    fn from(bf: CuckooFilter<DefaultHasher>, elem_count: usize) -> Self {
+        let bf_str= serde_json::to_string(bf);
         let mut bloom_filter_bytes = Vec::with_capacity(std::mem::size_of_val(bf_slice));
         for &x in bf_slice {
             bloom_filter_bytes.extend_from_slice(&x.to_le_bytes());

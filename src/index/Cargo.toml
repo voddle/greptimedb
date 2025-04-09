@@ -17,6 +17,7 @@ common-error.workspace = true
 common-macro.workspace = true
 common-runtime.workspace = true
 common-telemetry.workspace = true
+cuckoofilter = { version = "0.5.0", features = ["serde_support"] }
 fastbloom = "0.8"
 fst.workspace = true
 futures.workspace = true

@@ -13,14 +13,16 @@
 // limitations under the License.
 
 use std::ops::Range;
+use std::str;
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use common_base::range_read::RangeReader;
-use fastbloom::BloomFilter;
+use cuckoofilter::CuckooFilter;
 use greptime_proto::v1::index::{BloomFilterLoc, BloomFilterMeta};
 use prost::Message;
 use snafu::{ensure, ResultExt};
+use std::collections::hash_map::DefaultHasher;
 
 use crate::bloom_filter::error::{
     DecodeProtoSnafu, FileSizeTooSmallSnafu, IoSnafu, Result, UnexpectedMetaSizeSnafu,
@@ -54,19 +56,19 @@ pub trait BloomFilterReader: Sync {
     async fn metadata(&self) -> Result<BloomFilterMeta>;
 
     /// Reads a bloom filter with the given location.
-    async fn bloom_filter(&self, loc: &BloomFilterLoc) -> Result<BloomFilter> {
+    async fn bloom_filter(&self, loc: &BloomFilterLoc) -> Result<CuckooFilter<DefaultHasher>> {
         let bytes = self.range_read(loc.offset, loc.size as _).await?;
-        let vec = bytes
-            .chunks_exact(std::mem::size_of::<u64>())
-            .map(|chunk| u64::from_le_bytes(chunk.try_into().unwrap()))
-            .collect();
-        let bm = BloomFilter::from_vec(vec)
-            .seed(&SEED)
-            .expected_items(loc.element_count as _);
+        // let vec = bytes
+        //     .chunks_exact(std::mem::size_of::<u64>())
+        //     .map(|chunk| u64::from_le_bytes(chunk.try_into().unwrap()))
+        //     .collect();
+        let s = str::from_utf8(&bytes).unwrap();
+        let json: cuckoofilter::ExportedCuckooFilter = serde_json::from_str(&s).unwrap();
+        let bm = CuckooFilter::from(json);
         Ok(bm)
     }
 
-    async fn bloom_filter_vec(&self, locs: &[BloomFilterLoc]) -> Result<Vec<BloomFilter>> {
+    async fn bloom_filter_vec(&self, locs: &[BloomFilterLoc]) -> Result<Vec<CuckooFilter<DefaultHasher>>> {
         let ranges = locs
             .iter()
             .map(|l| l.offset..l.offset + l.size)
@@ -75,13 +77,13 @@ pub trait BloomFilterReader: Sync {
 
         let mut result = Vec::with_capacity(bss.len());
         for (bs, loc) in bss.into_iter().zip(locs.iter()) {
-            let vec = bs
-                .chunks_exact(std::mem::size_of::<u64>())
-                .map(|chunk| u64::from_le_bytes(chunk.try_into().unwrap()))
-                .collect();
-            let bm = BloomFilter::from_vec(vec)
-                .seed(&SEED)
-                .expected_items(loc.element_count as _);
+            // let vec = bs
+            //     .chunks_exact(std::mem::size_of::<u64>())
+            //     .map(|chunk| u64::from_le_bytes(chunk.try_into().unwrap()))
+            //     .collect();
+            let s = str::from_utf8(&bs).unwrap();
+            let json: cuckoofilter::ExportedCuckooFilter = serde_json::from_str(&s).unwrap();
+            let bm = CuckooFilter::from(json);
             result.push(bm);
         }
 

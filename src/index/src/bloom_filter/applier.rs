@@ -15,8 +15,9 @@
 use std::collections::HashSet;
 use std::ops::Range;
 
-use fastbloom::BloomFilter;
+use cuckoofilter::CuckooFilter;
 use greptime_proto::v1::index::BloomFilterMeta;
+use std::collections::hash_map::DefaultHasher;
 use itertools::Itertools;
 
 use crate::bloom_filter::error::Result;
@@ -95,7 +96,7 @@ impl BloomFilterApplier {
     async fn load_bloom_filters(
         &mut self,
         segments: &[usize],
-    ) -> Result<(Vec<(u64, usize)>, Vec<BloomFilter>)> {
+    ) -> Result<(Vec<(u64, usize)>, Vec<CuckooFilter<DefaultHasher>>)> {
         let segment_locations = segments
             .iter()
             .map(|&seg| (self.meta.segment_loc_indices[seg], seg))
@@ -117,7 +118,7 @@ impl BloomFilterApplier {
     fn find_matching_rows(
         &self,
         segment_locations: Vec<(u64, usize)>,
-        bloom_filters: Vec<BloomFilter>,
+        bloom_filters: Vec<CuckooFilter<DefaultHasher>>,
         predicates: &[InListPredicate],
     ) -> Vec<Range<usize>> {
         let rows_per_segment = self.meta.rows_per_segment as usize;
