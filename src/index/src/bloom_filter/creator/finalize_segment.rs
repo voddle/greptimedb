@@ -226,9 +226,9 @@ pub struct FinalizedBloomFilterSegment {
 
 impl FinalizedBloomFilterSegment {
     fn from(bf: CuckooFilter<DefaultHasher>, elem_count: usize) -> Self {
-        let bf_str= serde_json::to_string(bf);
-        let mut bloom_filter_bytes = Vec::with_capacity(std::mem::size_of_val(bf_slice));
-        for &x in bf_slice {
+        let bf_str= serde_json::to_string(&bf.export()).unwrap().into_bytes();
+        let mut bloom_filter_bytes = Vec::with_capacity(std::mem::size_of_val(&bf_str));
+        for &x in bf_str.iter() {
             bloom_filter_bytes.extend_from_slice(&x.to_le_bytes());
         }
 
@@ -251,6 +251,13 @@ mod tests {
     use super::*;
     use crate::bloom_filter::creator::tests::u64_vec_from_bytes;
     use crate::external_provider::MockExternalTempFileProvider;
+
+    pub fn u8_vec_from_bytes(bytes: &[u8]) -> Vec<u8> {
+        bytes
+            .chunks_exact(std::mem::size_of::<u8>())
+            .map(|chunk| u8::from_le_bytes(chunk.try_into().unwrap()))
+            .collect()
+    }
 
     #[tokio::test]
     async fn test_finalized_bloom_filter_storage() {
@@ -311,12 +318,13 @@ mod tests {
             let segment = stream.next().await.unwrap().unwrap();
             assert_eq!(segment.element_count, elem_count);
 
-            let v = u64_vec_from_bytes(&segment.bloom_filter_bytes);
+            let v = String::from_utf8(u8_vec_from_bytes(&segment.bloom_filter_bytes)).unwrap();
+            let json: cuckoofilter::ExportedCuckooFilter = serde_json::from_str(&v).unwrap();
+
+
 
             // Check the correctness of the Bloom filter.
-            let bf = BloomFilter::from_vec(v)
-                .seed(&SEED)
-                .expected_items(segment.element_count);
+            let bf: CuckooFilter<DefaultHasher> = CuckooFilter::from(json);
             for elem in (elem_count * i..elem_count * (i + 1)).map(|x| x.to_string().into_bytes()) {
                 assert!(bf.contains(&elem));
             }
