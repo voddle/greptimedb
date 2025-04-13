@@ -1,5 +1,3 @@
-// Copyright 2023 Greptime Team
-//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -97,19 +95,22 @@ impl FinalizedBloomFilterStorage {
         elems: impl IntoIterator<Item = Bytes>,
         element_count: usize,
     ) -> Result<()> {
-        let mut bf = CuckooFilter::new();
+        let mut bf = CuckooFilter::with_capacity(4096);
+        println!("hello~0");
         for elem in elems.into_iter() {
-            bf.add(&elem);
+            bf.add(&elem).unwrap();
         }
 
         let fbf = FinalizedBloomFilterSegment::from(bf, element_count);
 
         // Reuse the last segment if it is the same as the current one.
         if self.in_memory.last() == Some(&fbf) {
+            println!("hello~1");
             self.segment_indices
                 .push(self.flushed_seg_count + self.in_memory.len() - 1);
             return Ok(());
         }
+        // panic!("checkpoint 1");
 
         // Update memory usage.
         let memory_diff = fbf.bloom_filter_bytes.len();
@@ -121,19 +122,25 @@ impl FinalizedBloomFilterStorage {
         self.in_memory.push(fbf);
         self.segment_indices
             .push(self.flushed_seg_count + self.in_memory.len() - 1);
+        // panic!("checkpoint 2");
 
         // Flush to disk if necessary.
 
         // Do not flush if memory usage is too low.
         if self.memory_usage < MIN_MEMORY_USAGE_THRESHOLD {
+            println!("hello~2");
             return Ok(());
         }
+        println!("checkpoint 3");
 
         // Check if the global memory usage exceeds the threshold and flush to disk if necessary.
+        println!("hello~");
         if let Some(threshold) = self.global_memory_usage_threshold {
             let global = self.global_memory_usage.load(Ordering::Relaxed);
+            println!("global: {:?}, threshold: {:?}", global, threshold);
 
             if global > threshold {
+                println!("checkpoint 4");
                 self.flush_in_memory_to_disk().await?;
 
                 self.global_memory_usage
@@ -260,6 +267,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_add() {
+        let mut mock_provider = MockExternalTempFileProvider::new();
+        let mock_files: Arc<Mutex<HashMap<String, Box<dyn AsyncRead + Unpin + Send>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+
+        mock_provider.expect_create().returning({
+            let files = Arc::clone(&mock_files);
+            move |file_group, file_id| {
+                assert!(file_group.starts_with("intm-bloom-filters-"));
+                let mut files = files.lock().unwrap();
+                let (writer, reader) = duplex(2 * 1024 * 1024);
+                files.insert(file_id.to_string(), Box::new(reader.compat()));
+                Ok(Box::new(writer.compat_write()))
+            }
+        });
+
+        mock_provider.expect_read_all().returning({
+            let files = Arc::clone(&mock_files);
+            move |file_group| {
+                assert!(file_group.starts_with("intm-bloom-filters-"));
+                let mut files = files.lock().unwrap();
+                Ok(files.drain().collect::<Vec<_>>())
+            }
+        });
+       
+
+        let global_memory_usage = Arc::new(AtomicUsize::new(0));
+        let global_memory_usage_threshold = Some(1024 * 1024); // 1MB
+        let provider = Arc::new(mock_provider);
+        let mut storage = FinalizedBloomFilterStorage::new(
+            provider,
+            global_memory_usage.clone(),
+            global_memory_usage_threshold,
+        );
+        let elems = (0..100).map(|x| x.to_string().into_bytes());
+        storage.add(elems, 1).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn test_finalized_bloom_filter_storage() {
         let mut mock_provider = MockExternalTempFileProvider::new();
 
@@ -299,6 +345,7 @@ mod tests {
         let batch = 1000;
         let dup_batch = 200;
 
+        println!("checkpoint 1");
         for i in 0..(batch - dup_batch) {
             let elems = (elem_count * i..elem_count * (i + 1)).map(|x| x.to_string().into_bytes());
             storage.add(elems, elem_count).await.unwrap();
@@ -306,9 +353,12 @@ mod tests {
         for _ in 0..dup_batch {
             storage.add(Some(vec![]), 1).await.unwrap();
         }
+        // panic!("checkpoint 3");
 
         // Flush happens.
         assert!(storage.intermediate_file_id_counter > 0);
+        // panic!("checkpoint 4");
+
 
         // Drain the storage.
         let (indices, mut stream) = storage.drain().await.unwrap();
@@ -338,6 +388,7 @@ mod tests {
         assert!(indices[(batch - dup_batch)..batch]
             .iter()
             .all(|&x| x == batch - dup_batch));
+        println!("finished!");
     }
 
     #[tokio::test]
