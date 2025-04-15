@@ -95,13 +95,15 @@ impl FinalizedBloomFilterStorage {
         elems: impl IntoIterator<Item = Bytes>,
         element_count: usize,
     ) -> Result<()> {
-        let mut bf = CuckooFilter::with_capacity(4096);
+        let mut bf = CuckooFilter::with_capacity(128);
         for elem in elems.into_iter() {
             bf.add(&elem).unwrap();
             println!("memory usage: {:?}", bf.memory_usage());
+            println!("memory usage size of: {:?}", size_of_val(&bf));
         }
 
         let fbf = FinalizedBloomFilterSegment::from(bf, element_count);
+        println!("fbf memory usage: {:?}", fbf.bloom_filter_bytes.len());
 
         // Reuse the last segment if it is the same as the current one.
         if self.in_memory.last() == Some(&fbf) {
