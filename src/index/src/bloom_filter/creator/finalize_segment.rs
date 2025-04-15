@@ -96,16 +96,15 @@ impl FinalizedBloomFilterStorage {
         element_count: usize,
     ) -> Result<()> {
         let mut bf = CuckooFilter::with_capacity(4096);
-        println!("hello~0");
         for elem in elems.into_iter() {
             bf.add(&elem).unwrap();
         }
+        println!("{:?}", bf.memory_usage());
 
         let fbf = FinalizedBloomFilterSegment::from(bf, element_count);
 
         // Reuse the last segment if it is the same as the current one.
         if self.in_memory.last() == Some(&fbf) {
-            println!("hello~1");
             self.segment_indices
                 .push(self.flushed_seg_count + self.in_memory.len() - 1);
             return Ok(());
