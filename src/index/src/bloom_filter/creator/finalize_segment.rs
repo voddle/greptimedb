@@ -105,6 +105,7 @@ impl FinalizedBloomFilterStorage {
         }
 
         let fbf = FinalizedBloomFilterSegment::from(bf, element_count);
+        println!("memory usage: {:?}", fbf.bloom_filter_bytes.len());
 
         // Reuse the last segment if it is the same as the current one.
         if self.in_memory.last() == Some(&fbf) {
@@ -253,6 +254,45 @@ mod tests {
     use super::*;
     use crate::bloom_filter::creator::tests::u64_vec_from_bytes;
     use crate::external_provider::MockExternalTempFileProvider;
+
+        #[tokio::test]
+    async fn test_add() {
+        let mut mock_provider = MockExternalTempFileProvider::new();
+        let mock_files: Arc<Mutex<HashMap<String, Box<dyn AsyncRead + Unpin + Send>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+
+        mock_provider.expect_create().returning({
+            let files = Arc::clone(&mock_files);
+            move |file_group, file_id| {
+                assert!(file_group.starts_with("intm-bloom-filters-"));
+                let mut files = files.lock().unwrap();
+                let (writer, reader) = duplex(2 * 1024 * 1024);
+                files.insert(file_id.to_string(), Box::new(reader.compat()));
+                Ok(Box::new(writer.compat_write()))
+            }
+        });
+
+        mock_provider.expect_read_all().returning({
+            let files = Arc::clone(&mock_files);
+            move |file_group| {
+                assert!(file_group.starts_with("intm-bloom-filters-"));
+                let mut files = files.lock().unwrap();
+                Ok(files.drain().collect::<Vec<_>>())
+            }
+        });
+       
+
+        let global_memory_usage = Arc::new(AtomicUsize::new(0));
+        let global_memory_usage_threshold = Some(1024 * 1024); // 1MB
+        let provider = Arc::new(mock_provider);
+        let mut storage = FinalizedBloomFilterStorage::new(
+            provider,
+            global_memory_usage.clone(),
+            global_memory_usage_threshold,
+        );
+        let elems = (0..100).map(|x| x.to_string().into_bytes());
+        storage.add(elems, 1).await.unwrap();
+    }
 
     #[tokio::test]
     async fn test_finalized_bloom_filter_storage() {
