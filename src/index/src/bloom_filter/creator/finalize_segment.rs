@@ -101,6 +101,7 @@ impl FinalizedBloomFilterStorage {
             .expected_items(element_count);
         for elem in elems.into_iter() {
             bf.insert(&elem);
+            println!("memory usage: {:?}", size_of_val(&bf));
         }
 
         let fbf = FinalizedBloomFilterSegment::from(bf, element_count);
