@@ -255,7 +255,7 @@ mod tests {
     use crate::bloom_filter::creator::tests::u64_vec_from_bytes;
     use crate::external_provider::MockExternalTempFileProvider;
 
-        #[tokio::test]
+    #[tokio::test]
     async fn test_add() {
         let mut mock_provider = MockExternalTempFileProvider::new();
         let mock_files: Arc<Mutex<HashMap<String, Box<dyn AsyncRead + Unpin + Send>>>> =
@@ -291,7 +291,7 @@ mod tests {
             global_memory_usage_threshold,
         );
         let elems = (0..100).map(|x| x.to_string().into_bytes());
-        storage.add(elems, 1).await.unwrap();
+        storage.add(elems, 100).await.unwrap();
     }
 
     #[tokio::test]
