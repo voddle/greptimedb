@@ -303,7 +303,7 @@ mod tests {
             global_memory_usage_threshold,
         );
         let elems = (0..100).map(|x| x.to_string().into_bytes());
-        storage.add(elems, 1).await.unwrap();
+        storage.add(elems, 100).await.unwrap();
     }
 
     #[tokio::test]
