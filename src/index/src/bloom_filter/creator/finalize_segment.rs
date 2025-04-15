@@ -105,7 +105,7 @@ impl FinalizedBloomFilterStorage {
         }
 
         let fbf = FinalizedBloomFilterSegment::from(bf, element_count);
-        println!("memory usage: {:?}", fbf.bloom_filter_bytes.len());
+        println!("fbf memory usage: {:?}", fbf.bloom_filter_bytes.len());
 
         // Reuse the last segment if it is the same as the current one.
         if self.in_memory.last() == Some(&fbf) {
