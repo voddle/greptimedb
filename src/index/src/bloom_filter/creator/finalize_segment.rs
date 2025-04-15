@@ -98,8 +98,8 @@ impl FinalizedBloomFilterStorage {
         let mut bf = CuckooFilter::with_capacity(4096);
         for elem in elems.into_iter() {
             bf.add(&elem).unwrap();
+            println!("memory usage: {:?}", bf.memory_usage());
         }
-        println!("{:?}", bf.memory_usage());
 
         let fbf = FinalizedBloomFilterSegment::from(bf, element_count);
 
