@@ -129,19 +129,14 @@ impl FinalizedBloomFilterStorage {
 
         // Do not flush if memory usage is too low.
         if self.memory_usage < MIN_MEMORY_USAGE_THRESHOLD {
-            println!("hello~2");
             return Ok(());
         }
-        println!("checkpoint 3");
 
         // Check if the global memory usage exceeds the threshold and flush to disk if necessary.
-        println!("hello~");
         if let Some(threshold) = self.global_memory_usage_threshold {
             let global = self.global_memory_usage.load(Ordering::Relaxed);
-            println!("global: {:?}, threshold: {:?}", global, threshold);
 
             if global > threshold {
-                println!("checkpoint 4");
                 self.flush_in_memory_to_disk().await?;
 
                 self.global_memory_usage
