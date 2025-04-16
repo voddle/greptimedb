@@ -59,12 +59,17 @@ pub trait BloomFilterReader: Sync {
     async fn bloom_filter(&self, loc: &BloomFilterLoc) -> Result<CuckooFilter<DefaultHasher>> {
         let bytes = self.range_read(loc.offset, loc.size as _).await?;
         // let vec = bytes
-        //     .chunks_exact(std::mem::size_of::<u64>())
+        //     .chunks_exact(std::mem::size_of::<u8>())
         //     .map(|chunk| u64::from_le_bytes(chunk.try_into().unwrap()))
         //     .collect();
-        let s = str::from_utf8(&bytes).unwrap();
-        let json: cuckoofilter::ExportedCuckooFilter = serde_json::from_str(&s).unwrap();
-        let bm = CuckooFilter::from(json);
+        let vec: Vec<u8> = bytes.to_vec();
+        // let s = str::from_utf8(&bytes).unwrap();
+        // let json: cuckoofilter::ExportedCuckooFilter = serde_json::from_str(&s).unwrap();
+        let export_cf = cuckoofilter::ExportedCuckooFilter{
+            values: vec,
+            length: loc.element_count as _,
+        };
+        let bm = CuckooFilter::from(export_cf);
         Ok(bm)
     }
 
@@ -81,9 +86,12 @@ pub trait BloomFilterReader: Sync {
             //     .chunks_exact(std::mem::size_of::<u64>())
             //     .map(|chunk| u64::from_le_bytes(chunk.try_into().unwrap()))
             //     .collect();
-            let s = str::from_utf8(&bs).unwrap();
-            let json: cuckoofilter::ExportedCuckooFilter = serde_json::from_str(&s).unwrap();
-            let bm = CuckooFilter::from(json);
+            let bytes = self.range_read(loc.offset, loc.size as _).await?;
+            let export_cf = cuckoofilter::ExportedCuckooFilter{
+                values: bytes.to_vec(),
+                length: loc.element_count as _,
+            };
+            let bm = CuckooFilter::from(export_cf);
             result.push(bm);
         }
 

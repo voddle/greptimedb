@@ -95,12 +95,14 @@ impl FinalizedBloomFilterStorage {
         elems: impl IntoIterator<Item = Bytes>,
         element_count: usize,
     ) -> Result<()> {
-        let mut bf = CuckooFilter::with_capacity(128);
+        let mut bf = CuckooFilter::with_capacity(4096);
         for elem in elems.into_iter() {
             bf.add(&elem).unwrap();
-            println!("memory usage: {:?}", bf.memory_usage());
-            println!("memory usage size of: {:?}", size_of_val(&bf));
+            // println!("memory usage: {:?}", bf.memory_usage());
+            // println!("memory usage size of: {:?}", size_of_val(&bf));
         }
+        println!("memory usage: {:?}", bf.memory_usage());
+        println!("memory usage size of: {:?}", size_of_val(&bf));
 
         let fbf = FinalizedBloomFilterSegment::from(bf, element_count);
         println!("fbf memory usage: {:?}", fbf.bloom_filter_bytes.len());
@@ -229,7 +231,7 @@ pub struct FinalizedBloomFilterSegment {
 
 impl FinalizedBloomFilterSegment {
     fn from(bf: CuckooFilter<DefaultHasher>, elem_count: usize) -> Self {
-        let bf_str= serde_json::to_string(&bf.export()).unwrap().into_bytes();
+        let bf_str= &bf.export().values;
         let mut bloom_filter_bytes = Vec::with_capacity(std::mem::size_of_val(&bf_str));
         for &x in bf_str.iter() {
             bloom_filter_bytes.extend_from_slice(&x.to_le_bytes());
@@ -364,13 +366,16 @@ mod tests {
             let segment = stream.next().await.unwrap().unwrap();
             assert_eq!(segment.element_count, elem_count);
 
-            let v = String::from_utf8(u8_vec_from_bytes(&segment.bloom_filter_bytes)).unwrap();
-            let json: cuckoofilter::ExportedCuckooFilter = serde_json::from_str(&v).unwrap();
+            let v: &Vec<u8> = &segment.bloom_filter_bytes.to_vec();
+            let export_cf = cuckoofilter::ExportedCuckooFilter{
+                values: v.to_vec(),
+                length: segment.element_count as _,
+            };
 
 
 
             // Check the correctness of the Bloom filter.
-            let bf: CuckooFilter<DefaultHasher> = CuckooFilter::from(json);
+            let bf: CuckooFilter<DefaultHasher> = CuckooFilter::from(export_cf);
             for elem in (elem_count * i..elem_count * (i + 1)).map(|x| x.to_string().into_bytes()) {
                 assert!(bf.contains(&elem));
             }

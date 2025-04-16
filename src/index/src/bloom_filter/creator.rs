@@ -316,9 +316,11 @@ mod tests {
             let bloom_filter_bytes =
                 &bytes[segment.offset as usize..(segment.offset + segment.size) as usize];
             // let v = u64_vec_from_bytes(bloom_filter_bytes);
-            let s = str::from_utf8(&bloom_filter_bytes).unwrap();
-            let json: cuckoofilter::ExportedCuckooFilter = serde_json::from_str(&s).unwrap();
-            let bloom_filter: CuckooFilter<DefaultHasher> = CuckooFilter::from(json);
+            let export_cf = cuckoofilter::ExportedCuckooFilter {
+                values: bloom_filter_bytes.to_vec(),
+                length: segment.element_count as _,
+            };
+            let bloom_filter: CuckooFilter<DefaultHasher> = CuckooFilter::from(export_cf);
             bfs.push(bloom_filter);
         }
 
@@ -389,9 +391,11 @@ mod tests {
             let bloom_filter_bytes =
                 &bytes[segment.offset as usize..(segment.offset + segment.size) as usize];
             // let v = u64_vec_from_bytes(bloom_filter_bytes);
-            let s = str::from_utf8(&bloom_filter_bytes).unwrap();
-            let json: cuckoofilter::ExportedCuckooFilter = serde_json::from_str(&s).unwrap();
-            let bloom_filter: CuckooFilter<DefaultHasher> = CuckooFilter::from(json);
+            let export_cf = cuckoofilter::ExportedCuckooFilter{
+                values: bloom_filter_bytes.to_vec(),
+                length: segment.element_count as _,
+            };
+            let bloom_filter: CuckooFilter<DefaultHasher> = CuckooFilter::from(export_cf);
             bfs.push(bloom_filter);
         }
 
