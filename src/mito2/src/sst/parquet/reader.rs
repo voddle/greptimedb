@@ -51,7 +51,7 @@ use crate::read::prune::{PruneReader, Source};
 use crate::read::{Batch, BatchReader};
 use crate::row_converter::build_primary_key_codec;
 use crate::sst::file::FileHandle;
-use crate::sst::index::bloom_filter::applier::BloomFilterIndexApplierRef;
+use crate::sst::index::cuckoo_filter::applier::CuckooFilterIndexApplierRef;
 use crate::sst::index::fulltext_index::applier::FulltextIndexApplierRef;
 use crate::sst::index::inverted_index::applier::InvertedIndexApplierRef;
 use crate::sst::parquet::file_range::{FileRangeContext, FileRangeContextRef};
@@ -81,7 +81,7 @@ pub struct ParquetReaderBuilder {
     cache_strategy: CacheStrategy,
     /// Index appliers.
     inverted_index_applier: Option<InvertedIndexApplierRef>,
-    bloom_filter_index_applier: Option<BloomFilterIndexApplierRef>,
+    cuckoo_filter_index_applier: Option<CuckooFilterIndexApplierRef>,
     fulltext_index_applier: Option<FulltextIndexApplierRef>,
     /// Expected metadata of the region while reading the SST.
     /// This is usually the latest metadata of the region. The reader use
@@ -104,7 +104,7 @@ impl ParquetReaderBuilder {
             projection: None,
             cache_strategy: CacheStrategy::Disabled,
             inverted_index_applier: None,
-            bloom_filter_index_applier: None,
+            cuckoo_filter_index_applier: None,
             fulltext_index_applier: None,
             expected_metadata: None,
         }
@@ -143,13 +143,13 @@ impl ParquetReaderBuilder {
         self
     }
 
-    /// Attaches the bloom filter index applier to the builder.
+    /// Attaches the cuckoo filter index applier to the builder.
     #[must_use]
-    pub(crate) fn bloom_filter_index_applier(
+    pub(crate) fn cuckoo_filter_index_applier(
         mut self,
-        index_applier: Option<BloomFilterIndexApplierRef>,
+        index_applier: Option<CuckooFilterIndexApplierRef>,
     ) -> Self {
-        self.bloom_filter_index_applier = index_applier;
+        self.cuckoo_filter_index_applier = index_applier;
         self
     }
 
@@ -366,7 +366,7 @@ impl ParquetReaderBuilder {
             self.prune_row_groups_by_minmax(read_format, parquet_meta, &mut output, metrics);
         }
 
-        self.prune_row_groups_by_bloom_filter(parquet_meta, &mut output, metrics)
+        self.prune_row_groups_by_cuckoo_filter(parquet_meta, &mut output, metrics)
             .await;
 
         output
@@ -568,17 +568,17 @@ impl ParquetReaderBuilder {
         true
     }
 
-    async fn prune_row_groups_by_bloom_filter(
+    async fn prune_row_groups_by_cuckoo_filter(
         &self,
         parquet_meta: &ParquetMetaData,
         output: &mut BTreeMap<usize, Option<RowSelection>>,
         metrics: &mut ReaderFilterMetrics,
     ) -> bool {
-        let Some(index_applier) = &self.bloom_filter_index_applier else {
+        let Some(index_applier) = &self.cuckoo_filter_index_applier else {
             return false;
         };
 
-        if !self.file_handle.meta_ref().bloom_filter_index_available() {
+        if !self.file_handle.meta_ref().cuckoo_filter_index_available() {
             return false;
         }
 
@@ -599,14 +599,14 @@ impl ParquetReaderBuilder {
             Err(err) => {
                 if cfg!(any(test, feature = "test")) {
                     panic!(
-                        "Failed to apply bloom filter index, region_id: {}, file_id: {}, err: {:?}",
+                        "Failed to apply cuckoo filter index, region_id: {}, file_id: {}, err: {:?}",
                         self.file_handle.region_id(),
                         self.file_handle.file_id(),
                         err
                     );
                 } else {
                     warn!(
-                        err; "Failed to apply bloom filter index, region_id: {}, file_id: {}",
+                        err; "Failed to apply cuckoo filter index, region_id: {}, file_id: {}",
                         self.file_handle.region_id(), self.file_handle.file_id()
                     );
                 }
@@ -621,8 +621,8 @@ impl ParquetReaderBuilder {
                 .into_iter()
                 .map(|(rg, ranges)| (rg, ranges.into_iter())),
             output,
-            &mut metrics.rg_bloom_filtered,
-            &mut metrics.rows_bloom_filtered,
+            &mut metrics.rg_cuckoo_filtered,
+            &mut metrics.rows_cuckoo_filtered,
         );
 
         true
@@ -745,8 +745,8 @@ pub(crate) struct ReaderFilterMetrics {
     pub(crate) rg_inverted_filtered: usize,
     /// Number of row groups filtered by min-max index.
     pub(crate) rg_minmax_filtered: usize,
-    /// Number of row groups filtered by bloom filter index.
-    pub(crate) rg_bloom_filtered: usize,
+    /// Number of row groups filtered by cuckoo filter index.
+    pub(crate) rg_cuckoo_filtered: usize,
 
     /// Number of rows in row group before filtering.
     pub(crate) rows_total: usize,
@@ -754,8 +754,8 @@ pub(crate) struct ReaderFilterMetrics {
     pub(crate) rows_fulltext_filtered: usize,
     /// Number of rows in row group filtered by inverted index.
     pub(crate) rows_inverted_filtered: usize,
-    /// Number of rows in row group filtered by bloom filter index.
-    pub(crate) rows_bloom_filtered: usize,
+    /// Number of rows in row group filtered by cuckoo filter index.
+    pub(crate) rows_cuckoo_filtered: usize,
     /// Number of rows filtered by precise filter.
     pub(crate) rows_precise_filtered: usize,
 }
@@ -767,12 +767,12 @@ impl ReaderFilterMetrics {
         self.rg_fulltext_filtered += other.rg_fulltext_filtered;
         self.rg_inverted_filtered += other.rg_inverted_filtered;
         self.rg_minmax_filtered += other.rg_minmax_filtered;
-        self.rg_bloom_filtered += other.rg_bloom_filtered;
+        self.rg_cuckoo_filtered += other.rg_cuckoo_filtered;
 
         self.rows_total += other.rows_total;
         self.rows_fulltext_filtered += other.rows_fulltext_filtered;
         self.rows_inverted_filtered += other.rows_inverted_filtered;
-        self.rows_bloom_filtered += other.rows_bloom_filtered;
+        self.rows_cuckoo_filtered += other.rows_cuckoo_filtered;
         self.rows_precise_filtered += other.rows_precise_filtered;
     }
 
@@ -791,8 +791,8 @@ impl ReaderFilterMetrics {
             .with_label_values(&["minmax_index_filtered"])
             .inc_by(self.rg_minmax_filtered as u64);
         READ_ROW_GROUPS_TOTAL
-            .with_label_values(&["bloom_filter_index_filtered"])
-            .inc_by(self.rg_bloom_filtered as u64);
+            .with_label_values(&["cuckoo_filter_index_filtered"])
+            .inc_by(self.rg_cuckoo_filtered as u64);
 
         PRECISE_FILTER_ROWS_TOTAL
             .with_label_values(&["parquet"])
@@ -807,8 +807,8 @@ impl ReaderFilterMetrics {
             .with_label_values(&["inverted_index_filtered"])
             .inc_by(self.rows_inverted_filtered as u64);
         READ_ROWS_IN_ROW_GROUP_TOTAL
-            .with_label_values(&["bloom_filter_index_filtered"])
-            .inc_by(self.rows_bloom_filtered as u64);
+            .with_label_values(&["cuckoo_filter_index_filtered"])
+            .inc_by(self.rows_cuckoo_filtered as u64);
     }
 }
 
@@ -1068,7 +1068,7 @@ impl Drop for ParquetReader {
                 - metrics.filter_metrics.rg_inverted_filtered
                 - metrics.filter_metrics.rg_minmax_filtered
                 - metrics.filter_metrics.rg_fulltext_filtered
-                - metrics.filter_metrics.rg_bloom_filtered,
+                - metrics.filter_metrics.rg_cuckoo_filtered,
             metrics.filter_metrics.rg_total,
             metrics
         );

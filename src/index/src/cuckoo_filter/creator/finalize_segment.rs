@@ -21,54 +21,54 @@ use futures::{stream, AsyncWriteExt, Stream};
 use std::collections::hash_map::DefaultHasher;
 use snafu::ResultExt;
 
-use super::intermediate_codec::IntermediateBloomFilterCodecV1;
-use crate::bloom_filter::creator::{FALSE_POSITIVE_RATE, SEED};
-use crate::bloom_filter::error::{IntermediateSnafu, IoSnafu, Result};
+use super::intermediate_codec::IntermediateCuckooFilterCodecV1;
+use crate::cuckoo_filter::creator::{FALSE_POSITIVE_RATE, SEED};
+use crate::cuckoo_filter::error::{IntermediateSnafu, IoSnafu, Result};
 use crate::external_provider::ExternalTempFileProvider;
 use crate::Bytes;
 
-/// The minimum memory usage threshold for flushing in-memory Bloom filters to disk.
+/// The minimum memory usage threshold for flushing in-memory Cuckoo filters to disk.
 const MIN_MEMORY_USAGE_THRESHOLD: usize = 1024 * 1024; // 1MB
 
-/// Storage for finalized Bloom filters.
-pub struct FinalizedBloomFilterStorage {
-    /// Indices of the segments in the sequence of finalized Bloom filters.
+/// Storage for finalized Cuckoo filters.
+pub struct FinalizedCuckooFilterStorage {
+    /// Indices of the segments in the sequence of finalized Cuckoo filters.
     segment_indices: Vec<usize>,
 
-    /// Bloom filters that are stored in memory.
-    in_memory: Vec<FinalizedBloomFilterSegment>,
+    /// Cuckoo filters that are stored in memory.
+    in_memory: Vec<FinalizedCuckooFilterSegment>,
 
-    /// Used to generate unique file IDs for intermediate Bloom filters.
+    /// Used to generate unique file IDs for intermediate Cuckoo filters.
     intermediate_file_id_counter: usize,
 
-    /// Prefix for intermediate Bloom filter files.
+    /// Prefix for intermediate Cuckoo filter files.
     intermediate_prefix: String,
 
-    /// The provider for intermediate Bloom filter files.
+    /// The provider for intermediate Cuckoo filter files.
     intermediate_provider: Arc<dyn ExternalTempFileProvider>,
 
-    /// The memory usage of the in-memory Bloom filters.
+    /// The memory usage of the in-memory Cuckoo filters.
     memory_usage: usize,
 
     /// The global memory usage provided by the user to track the
-    /// total memory usage of the creating Bloom filters.
+    /// total memory usage of the creating Cuckoo filters.
     global_memory_usage: Arc<AtomicUsize>,
 
-    /// The threshold of the global memory usage of the creating Bloom filters.
+    /// The threshold of the global memory usage of the creating Cuckoo filters.
     global_memory_usage_threshold: Option<usize>,
 
     /// Records the number of flushed segments.
     flushed_seg_count: usize,
 }
 
-impl FinalizedBloomFilterStorage {
-    /// Creates a new `FinalizedBloomFilterStorage`.
+impl FinalizedCuckooFilterStorage {
+    /// Creates a new `FinalizedCuckooFilterStorage`.
     pub fn new(
         intermediate_provider: Arc<dyn ExternalTempFileProvider>,
         global_memory_usage: Arc<AtomicUsize>,
         global_memory_usage_threshold: Option<usize>,
     ) -> Self {
-        let external_prefix = format!("intm-bloom-filters-{}", uuid::Uuid::new_v4());
+        let external_prefix = format!("intm-cuckoo-filters-{}", uuid::Uuid::new_v4());
         Self {
             segment_indices: Vec::new(),
             in_memory: Vec::new(),
@@ -87,9 +87,9 @@ impl FinalizedBloomFilterStorage {
         self.memory_usage
     }
 
-    /// Adds a new finalized Bloom filter to the storage.
+    /// Adds a new finalized Cuckoo filter to the storage.
     ///
-    /// If the memory usage exceeds the threshold, flushes the in-memory Bloom filters to disk.
+    /// If the memory usage exceeds the threshold, flushes the in-memory Cuckoo filters to disk.
     pub async fn add(
         &mut self,
         elems: impl IntoIterator<Item = Bytes>,
@@ -104,8 +104,8 @@ impl FinalizedBloomFilterStorage {
         println!("memory usage: {:?}", bf.memory_usage());
         println!("memory usage size of: {:?}", size_of_val(&bf));
 
-        let fbf = FinalizedBloomFilterSegment::from(bf, element_count);
-        println!("fbf memory usage: {:?}", fbf.bloom_filter_bytes.len());
+        let fbf = FinalizedCuckooFilterSegment::from(bf, element_count);
+        println!("fbf memory usage: {:?}", fbf.cuckoo_filter_bytes.len());
 
         // Reuse the last segment if it is the same as the current one.
         if self.in_memory.last() == Some(&fbf) {
@@ -116,12 +116,12 @@ impl FinalizedBloomFilterStorage {
         // panic!("checkpoint 1");
 
         // Update memory usage.
-        let memory_diff = fbf.bloom_filter_bytes.len();
+        let memory_diff = fbf.cuckoo_filter_bytes.len();
         self.memory_usage += memory_diff;
         self.global_memory_usage
             .fetch_add(memory_diff, Ordering::Relaxed);
 
-        // Add the finalized Bloom filter to the in-memory storage.
+        // Add the finalized Cuckoo filter to the in-memory storage.
         self.in_memory.push(fbf);
         self.segment_indices
             .push(self.flushed_seg_count + self.in_memory.len() - 1);
@@ -150,12 +150,12 @@ impl FinalizedBloomFilterStorage {
         Ok(())
     }
 
-    /// Drains the storage and returns indieces of the segments and a stream of finalized Bloom filters.
+    /// Drains the storage and returns indieces of the segments and a stream of finalized Cuckoo filters.
     pub async fn drain(
         &mut self,
     ) -> Result<(
         Vec<usize>,
-        Pin<Box<dyn Stream<Item = Result<FinalizedBloomFilterSegment>> + Send + '_>>,
+        Pin<Box<dyn Stream<Item = Result<FinalizedCuckooFilterSegment>> + Send + '_>>,
     )> {
         // FAST PATH: memory only
         if self.intermediate_file_id_counter == 0 {
@@ -175,7 +175,7 @@ impl FinalizedBloomFilterStorage {
 
         let streams = on_disk
             .into_iter()
-            .map(|(_, reader)| FramedRead::new(reader, IntermediateBloomFilterCodecV1::default()));
+            .map(|(_, reader)| FramedRead::new(reader, IntermediateCuckooFilterCodecV1::default()));
 
         let in_memory_stream = stream::iter(self.in_memory.drain(..)).map(Ok);
         Ok((
@@ -184,7 +184,7 @@ impl FinalizedBloomFilterStorage {
         ))
     }
 
-    /// Flushes the in-memory Bloom filters to disk.
+    /// Flushes the in-memory Cuckoo filters to disk.
     async fn flush_in_memory_to_disk(&mut self) -> Result<()> {
         let file_id = self.intermediate_file_id_counter;
         self.intermediate_file_id_counter += 1;
@@ -197,7 +197,7 @@ impl FinalizedBloomFilterStorage {
             .await
             .context(IntermediateSnafu)?;
 
-        let fw = FramedWrite::new(&mut writer, IntermediateBloomFilterCodecV1::default());
+        let fw = FramedWrite::new(&mut writer, IntermediateCuckooFilterCodecV1::default());
         // `forward()` will flush and close the writer when the stream ends
         if let Err(e) = stream::iter(self.in_memory.drain(..).map(Ok))
             .forward(fw)
@@ -212,33 +212,33 @@ impl FinalizedBloomFilterStorage {
     }
 }
 
-impl Drop for FinalizedBloomFilterStorage {
+impl Drop for FinalizedCuckooFilterStorage {
     fn drop(&mut self) {
         self.global_memory_usage
             .fetch_sub(self.memory_usage, Ordering::Relaxed);
     }
 }
 
-/// A finalized Bloom filter segment.
+/// A finalized Cuckoo filter segment.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FinalizedBloomFilterSegment {
-    /// The underlying Bloom filter bytes.
-    pub bloom_filter_bytes: Vec<u8>,
+pub struct FinalizedCuckooFilterSegment {
+    /// The underlying Cuckoo filter bytes.
+    pub cuckoo_filter_bytes: Vec<u8>,
 
-    /// The number of elements in the Bloom filter.
+    /// The number of elements in the Cuckoo filter.
     pub element_count: usize,
 }
 
-impl FinalizedBloomFilterSegment {
+impl FinalizedCuckooFilterSegment {
     fn from(bf: CuckooFilter<DefaultHasher>, elem_count: usize) -> Self {
         let bf_str= &bf.export().values;
-        let mut bloom_filter_bytes = Vec::with_capacity(std::mem::size_of_val(&bf_str));
+        let mut cuckoo_filter_bytes = Vec::with_capacity(std::mem::size_of_val(&bf_str));
         for &x in bf_str.iter() {
-            bloom_filter_bytes.extend_from_slice(&x.to_le_bytes());
+            cuckoo_filter_bytes.extend_from_slice(&x.to_le_bytes());
         }
 
         Self {
-            bloom_filter_bytes,
+            cuckoo_filter_bytes,
             element_count: elem_count,
         }
     }
@@ -254,7 +254,7 @@ mod tests {
     use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
     use super::*;
-    use crate::bloom_filter::creator::tests::u64_vec_from_bytes;
+    use crate::cuckoo_filter::creator::tests::u64_vec_from_bytes;
     use crate::external_provider::MockExternalTempFileProvider;
 
     pub fn u8_vec_from_bytes(bytes: &[u8]) -> Vec<u8> {
@@ -273,7 +273,7 @@ mod tests {
         mock_provider.expect_create().returning({
             let files = Arc::clone(&mock_files);
             move |file_group, file_id| {
-                assert!(file_group.starts_with("intm-bloom-filters-"));
+                assert!(file_group.starts_with("intm-cuckoo-filters-"));
                 let mut files = files.lock().unwrap();
                 let (writer, reader) = duplex(2 * 1024 * 1024);
                 files.insert(file_id.to_string(), Box::new(reader.compat()));
@@ -284,7 +284,7 @@ mod tests {
         mock_provider.expect_read_all().returning({
             let files = Arc::clone(&mock_files);
             move |file_group| {
-                assert!(file_group.starts_with("intm-bloom-filters-"));
+                assert!(file_group.starts_with("intm-cuckoo-filters-"));
                 let mut files = files.lock().unwrap();
                 Ok(files.drain().collect::<Vec<_>>())
             }
@@ -294,7 +294,7 @@ mod tests {
         let global_memory_usage = Arc::new(AtomicUsize::new(0));
         let global_memory_usage_threshold = Some(1024 * 1024); // 1MB
         let provider = Arc::new(mock_provider);
-        let mut storage = FinalizedBloomFilterStorage::new(
+        let mut storage = FinalizedCuckooFilterStorage::new(
             provider,
             global_memory_usage.clone(),
             global_memory_usage_threshold,
@@ -304,7 +304,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_finalized_bloom_filter_storage() {
+    async fn test_finalized_cuckoo_filter_storage() {
         let mut mock_provider = MockExternalTempFileProvider::new();
 
         let mock_files: Arc<Mutex<HashMap<String, Box<dyn AsyncRead + Unpin + Send>>>> =
@@ -313,7 +313,7 @@ mod tests {
         mock_provider.expect_create().returning({
             let files = Arc::clone(&mock_files);
             move |file_group, file_id| {
-                assert!(file_group.starts_with("intm-bloom-filters-"));
+                assert!(file_group.starts_with("intm-cuckoo-filters-"));
                 let mut files = files.lock().unwrap();
                 let (writer, reader) = duplex(2 * 1024 * 1024);
                 files.insert(file_id.to_string(), Box::new(reader.compat()));
@@ -324,7 +324,7 @@ mod tests {
         mock_provider.expect_read_all().returning({
             let files = Arc::clone(&mock_files);
             move |file_group| {
-                assert!(file_group.starts_with("intm-bloom-filters-"));
+                assert!(file_group.starts_with("intm-cuckoo-filters-"));
                 let mut files = files.lock().unwrap();
                 Ok(files.drain().collect::<Vec<_>>())
             }
@@ -333,7 +333,7 @@ mod tests {
         let global_memory_usage = Arc::new(AtomicUsize::new(0));
         let global_memory_usage_threshold = Some(1024 * 1024); // 1MB
         let provider = Arc::new(mock_provider);
-        let mut storage = FinalizedBloomFilterStorage::new(
+        let mut storage = FinalizedCuckooFilterStorage::new(
             provider,
             global_memory_usage.clone(),
             global_memory_usage_threshold,
@@ -366,7 +366,7 @@ mod tests {
             let segment = stream.next().await.unwrap().unwrap();
             assert_eq!(segment.element_count, elem_count);
 
-            let v: &Vec<u8> = &segment.bloom_filter_bytes.to_vec();
+            let v: &Vec<u8> = &segment.cuckoo_filter_bytes.to_vec();
             let export_cf = cuckoofilter::ExportedCuckooFilter{
                 values: v.to_vec(),
                 length: segment.element_count as _,
@@ -374,7 +374,7 @@ mod tests {
 
 
 
-            // Check the correctness of the Bloom filter.
+            // Check the correctness of the Cuckoo filter.
             let bf: CuckooFilter<DefaultHasher> = CuckooFilter::from(export_cf);
             for elem in (elem_count * i..elem_count * (i + 1)).map(|x| x.to_string().into_bytes()) {
                 assert!(bf.contains(&elem));
@@ -393,12 +393,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_finalized_bloom_filter_storage_all_dup() {
+    async fn test_finalized_cuckoo_filter_storage_all_dup() {
         let mock_provider = MockExternalTempFileProvider::new();
         let global_memory_usage = Arc::new(AtomicUsize::new(0));
         let global_memory_usage_threshold = Some(1024 * 1024); // 1MB
         let provider = Arc::new(mock_provider);
-        let mut storage = FinalizedBloomFilterStorage::new(
+        let mut storage = FinalizedCuckooFilterStorage::new(
             provider,
             global_memory_usage.clone(),
             global_memory_usage_threshold,

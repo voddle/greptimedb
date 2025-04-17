@@ -20,7 +20,7 @@ use datafusion_expr::expr::InList;
 use datafusion_expr::{BinaryExpr, Expr, Operator};
 use datatypes::data_type::ConcreteDataType;
 use datatypes::value::Value;
-use index::bloom_filter::applier::InListPredicate;
+use index::cuckoo_filter::applier::InListPredicate;
 use index::Bytes;
 use object_store::ObjectStore;
 use puffin::puffin_manager::cache::PuffinMetadataCacheRef;
@@ -29,25 +29,25 @@ use store_api::metadata::RegionMetadata;
 use store_api::storage::ColumnId;
 
 use crate::cache::file_cache::FileCacheRef;
-use crate::cache::index::bloom_filter_index::BloomFilterIndexCacheRef;
+use crate::cache::index::cuckoo_filter_index::CuckooFilterIndexCacheRef;
 use crate::error::{ColumnNotFoundSnafu, ConvertValueSnafu, Result};
 use crate::row_converter::SortField;
-use crate::sst::index::bloom_filter::applier::BloomFilterIndexApplier;
+use crate::sst::index::cuckoo_filter::applier::CuckooFilterIndexApplier;
 use crate::sst::index::codec::IndexValueCodec;
 use crate::sst::index::puffin_manager::PuffinManagerFactory;
 
-pub struct BloomFilterIndexApplierBuilder<'a> {
+pub struct CuckooFilterIndexApplierBuilder<'a> {
     region_dir: String,
     object_store: ObjectStore,
     metadata: &'a RegionMetadata,
     puffin_manager_factory: PuffinManagerFactory,
     file_cache: Option<FileCacheRef>,
     puffin_metadata_cache: Option<PuffinMetadataCacheRef>,
-    bloom_filter_index_cache: Option<BloomFilterIndexCacheRef>,
+    cuckoo_filter_index_cache: Option<CuckooFilterIndexCacheRef>,
     predicates: HashMap<ColumnId, Vec<InListPredicate>>,
 }
 
-impl<'a> BloomFilterIndexApplierBuilder<'a> {
+impl<'a> CuckooFilterIndexApplierBuilder<'a> {
     pub fn new(
         region_dir: String,
         object_store: ObjectStore,
@@ -61,7 +61,7 @@ impl<'a> BloomFilterIndexApplierBuilder<'a> {
             puffin_manager_factory,
             file_cache: None,
             puffin_metadata_cache: None,
-            bloom_filter_index_cache: None,
+            cuckoo_filter_index_cache: None,
             predicates: HashMap::default(),
         }
     }
@@ -79,16 +79,16 @@ impl<'a> BloomFilterIndexApplierBuilder<'a> {
         self
     }
 
-    pub fn with_bloom_filter_index_cache(
+    pub fn with_cuckoo_filter_index_cache(
         mut self,
-        bloom_filter_index_cache: Option<BloomFilterIndexCacheRef>,
+        cuckoo_filter_index_cache: Option<CuckooFilterIndexCacheRef>,
     ) -> Self {
-        self.bloom_filter_index_cache = bloom_filter_index_cache;
+        self.cuckoo_filter_index_cache = cuckoo_filter_index_cache;
         self
     }
 
     /// Builds the applier with given filter expressions
-    pub fn build(mut self, exprs: &[Expr]) -> Result<Option<BloomFilterIndexApplier>> {
+    pub fn build(mut self, exprs: &[Expr]) -> Result<Option<CuckooFilterIndexApplier>> {
         for expr in exprs {
             self.traverse_and_collect(expr);
         }
@@ -97,7 +97,7 @@ impl<'a> BloomFilterIndexApplierBuilder<'a> {
             return Ok(None);
         }
 
-        let applier = BloomFilterIndexApplier::new(
+        let applier = CuckooFilterIndexApplier::new(
             self.region_dir,
             self.metadata.region_id,
             self.object_store,
@@ -106,12 +106,12 @@ impl<'a> BloomFilterIndexApplierBuilder<'a> {
         )
         .with_file_cache(self.file_cache)
         .with_puffin_metadata_cache(self.puffin_metadata_cache)
-        .with_bloom_filter_cache(self.bloom_filter_index_cache);
+        .with_cuckoo_filter_cache(self.cuckoo_filter_index_cache);
 
         Ok(Some(applier))
     }
 
-    /// Recursively traverses expressions to collect bloom filter predicates
+    /// Recursively traverses expressions to collect cuckoo filter predicates
     fn traverse_and_collect(&mut self, expr: &Expr) {
         let res = match expr {
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => match op {
@@ -128,7 +128,7 @@ impl<'a> BloomFilterIndexApplierBuilder<'a> {
         };
 
         if let Err(err) = res {
-            warn!(err; "Failed to collect bloom filter predicates, ignore it. expr: {expr}");
+            warn!(err; "Failed to collect cuckoo filter predicates, ignore it. expr: {expr}");
         }
     }
 
@@ -301,7 +301,7 @@ mod tests {
     fn test_build_with_exprs() {
         let (_d, factory) = PuffinManagerFactory::new_for_test_block("test_build_with_exprs_");
         let metadata = test_region_metadata();
-        let builder = BloomFilterIndexApplierBuilder::new(
+        let builder = CuckooFilterIndexApplierBuilder::new(
             "test".to_string(),
             test_object_store(),
             &metadata,
@@ -337,7 +337,7 @@ mod tests {
     fn test_build_with_in_list() {
         let (_d, factory) = PuffinManagerFactory::new_for_test_block("test_build_with_in_list_");
         let metadata = test_region_metadata();
-        let builder = BloomFilterIndexApplierBuilder::new(
+        let builder = CuckooFilterIndexApplierBuilder::new(
             "test".to_string(),
             test_object_store(),
             &metadata,
@@ -363,7 +363,7 @@ mod tests {
     fn test_build_with_and_expressions() {
         let (_d, factory) = PuffinManagerFactory::new_for_test_block("test_build_with_and_");
         let metadata = test_region_metadata();
-        let builder = BloomFilterIndexApplierBuilder::new(
+        let builder = CuckooFilterIndexApplierBuilder::new(
             "test".to_string(),
             test_object_store(),
             &metadata,
@@ -395,7 +395,7 @@ mod tests {
     fn test_build_with_null_values() {
         let (_d, factory) = PuffinManagerFactory::new_for_test_block("test_build_with_null_");
         let metadata = test_region_metadata();
-        let builder = BloomFilterIndexApplierBuilder::new(
+        let builder = CuckooFilterIndexApplierBuilder::new(
             "test".to_string(),
             test_object_store(),
             &metadata,
@@ -432,7 +432,7 @@ mod tests {
     fn test_build_with_invalid_expressions() {
         let (_d, factory) = PuffinManagerFactory::new_for_test_block("test_build_with_invalid_");
         let metadata = test_region_metadata();
-        let builder = BloomFilterIndexApplierBuilder::new(
+        let builder = CuckooFilterIndexApplierBuilder::new(
             "test".to_string(),
             test_object_store(),
             &metadata,
@@ -467,7 +467,7 @@ mod tests {
     fn test_build_with_multiple_predicates_same_column() {
         let (_d, factory) = PuffinManagerFactory::new_for_test_block("test_build_with_multiple_");
         let metadata = test_region_metadata();
-        let builder = BloomFilterIndexApplierBuilder::new(
+        let builder = CuckooFilterIndexApplierBuilder::new(
             "test".to_string(),
             test_object_store(),
             &metadata,

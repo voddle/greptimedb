@@ -25,7 +25,7 @@ use store_api::storage::{RegionId, SequenceNumber};
 use crate::cache::file_cache::{FileCacheRef, FileType, IndexKey};
 use crate::cache::write_cache::SstUploadRequest;
 use crate::cache::CacheManagerRef;
-use crate::config::{BloomFilterConfig, FulltextIndexConfig, InvertedIndexConfig};
+use crate::config::{CuckooFilterConfig, FulltextIndexConfig, InvertedIndexConfig};
 use crate::error::{CleanDirSnafu, DeleteIndexSnafu, DeleteSstSnafu, OpenDalSnafu, Result};
 use crate::read::Source;
 use crate::region::options::IndexOptions;
@@ -158,7 +158,7 @@ impl AccessLayer {
                 index_options: request.index_options,
                 inverted_index_config: request.inverted_index_config,
                 fulltext_index_config: request.fulltext_index_config,
-                bloom_filter_index_config: request.bloom_filter_index_config,
+                cuckoo_filter_index_config: request.cuckoo_filter_index_config,
             };
             let mut writer = ParquetWriter::new_with_object_store(
                 self.object_store.clone(),
@@ -210,7 +210,7 @@ pub struct SstWriteRequest {
     pub index_options: IndexOptions,
     pub inverted_index_config: InvertedIndexConfig,
     pub fulltext_index_config: FulltextIndexConfig,
-    pub bloom_filter_index_config: BloomFilterConfig,
+    pub cuckoo_filter_index_config: CuckooFilterConfig,
 }
 
 pub(crate) async fn new_fs_cache_store(root: &str) -> Result<ObjectStore> {

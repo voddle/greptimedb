@@ -149,8 +149,8 @@ pub enum IndexType {
     InvertedIndex,
     /// Full-text index.
     FulltextIndex,
-    /// Bloom Filter index
-    BloomFilterIndex,
+    /// Cuckoo Filter index
+    CuckooFilterIndex,
 }
 
 impl FileMeta {
@@ -168,10 +168,10 @@ impl FileMeta {
         self.available_indexes.contains(&IndexType::FulltextIndex)
     }
 
-    /// Returns true if the file has a bloom filter index.
-    pub fn bloom_filter_index_available(&self) -> bool {
+    /// Returns true if the file has a cuckoo filter index.
+    pub fn cuckoo_filter_index_available(&self) -> bool {
         self.available_indexes
-            .contains(&IndexType::BloomFilterIndex)
+            .contains(&IndexType::CuckooFilterIndex)
     }
 
     pub fn index_file_size(&self) -> u64 {

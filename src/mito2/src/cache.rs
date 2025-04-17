@@ -28,7 +28,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use datatypes::value::Value;
 use datatypes::vectors::VectorRef;
-use index::bloom_filter_index::{BloomFilterIndexCache, BloomFilterIndexCacheRef};
+use index::cuckoo_filter_index::{CuckooFilterIndexCache, CuckooFilterIndexCacheRef};
 use moka::notification::RemovalCause;
 use moka::sync::Cache;
 use parquet::column::page::Page;
@@ -225,11 +225,11 @@ impl CacheStrategy {
         }
     }
 
-    /// Calls [CacheManager::bloom_filter_index_cache()].
+    /// Calls [CacheManager::cuckoo_filter_index_cache()].
     /// It returns None if the strategy is [CacheStrategy::Compaction] or [CacheStrategy::Disabled].
-    pub fn bloom_filter_index_cache(&self) -> Option<&BloomFilterIndexCacheRef> {
+    pub fn cuckoo_filter_index_cache(&self) -> Option<&CuckooFilterIndexCacheRef> {
         match self {
-            CacheStrategy::EnableAll(cache_manager) => cache_manager.bloom_filter_index_cache(),
+            CacheStrategy::EnableAll(cache_manager) => cache_manager.cuckoo_filter_index_cache(),
             CacheStrategy::Compaction(_) | CacheStrategy::Disabled => None,
         }
     }
@@ -259,8 +259,8 @@ pub struct CacheManager {
     write_cache: Option<WriteCacheRef>,
     /// Cache for inverted index.
     index_cache: Option<InvertedIndexCacheRef>,
-    /// Cache for bloom filter index.
-    bloom_filter_index_cache: Option<BloomFilterIndexCacheRef>,
+    /// Cache for cuckoo filter index.
+    cuckoo_filter_index_cache: Option<CuckooFilterIndexCacheRef>,
     /// Puffin metadata cache.
     puffin_metadata_cache: Option<PuffinMetadataCacheRef>,
     /// Cache for time series selectors.
@@ -413,8 +413,8 @@ impl CacheManager {
         self.index_cache.as_ref()
     }
 
-    pub(crate) fn bloom_filter_index_cache(&self) -> Option<&BloomFilterIndexCacheRef> {
-        self.bloom_filter_index_cache.as_ref()
+    pub(crate) fn cuckoo_filter_index_cache(&self) -> Option<&CuckooFilterIndexCacheRef> {
+        self.cuckoo_filter_index_cache.as_ref()
     }
 
     pub(crate) fn puffin_metadata_cache(&self) -> Option<&PuffinMetadataCacheRef> {
@@ -561,7 +561,7 @@ impl CacheManagerBuilder {
             self.index_content_page_size,
         );
         // TODO(ruihang): check if it's ok to reuse the same param with inverted index
-        let bloom_filter_index_cache = BloomFilterIndexCache::new(
+        let cuckoo_filter_index_cache = CuckooFilterIndexCache::new(
             self.index_metadata_size,
             self.index_content_size,
             self.index_content_page_size,
@@ -589,7 +589,7 @@ impl CacheManagerBuilder {
             page_cache,
             write_cache: self.write_cache,
             index_cache: Some(Arc::new(inverted_index_cache)),
-            bloom_filter_index_cache: Some(Arc::new(bloom_filter_index_cache)),
+            cuckoo_filter_index_cache: Some(Arc::new(cuckoo_filter_index_cache)),
             puffin_metadata_cache: Some(Arc::new(puffin_metadata_cache)),
             selector_result_cache,
         }

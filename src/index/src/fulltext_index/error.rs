@@ -91,8 +91,8 @@ pub enum Error {
     },
 
     #[snafu(display("Failed to finish bloom filter"))]
-    BloomFilterFinish {
-        source: crate::bloom_filter::error::Error,
+    CuckooFilterFinish {
+        source: crate::cuckoo_filter::error::Error,
         #[snafu(implicit)]
         location: Location,
     },
@@ -134,7 +134,7 @@ impl ErrorExt for Error {
 
             Io { .. } | Finished { .. } | Join { .. } | Aborted { .. } => StatusCode::Unexpected,
 
-            BloomFilterFinish { source, .. } => source.status_code(),
+            CuckooFilterFinish { source, .. } => source.status_code(),
             PuffinAddBlob { source, .. } => source.status_code(),
 
             External { source, .. } => source.status_code(),

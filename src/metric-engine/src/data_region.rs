@@ -149,7 +149,7 @@ impl DataRegion {
                         c.column_schema
                             .set_skipping_options(&SkippingIndexOptions {
                                 granularity,
-                                index_type: SkippingIndexType::BloomFilter,
+                                index_type: SkippingIndexType::CuckooFilter,
                             })
                             .context(SetSkippingIndexOptionSnafu)?;
                     }

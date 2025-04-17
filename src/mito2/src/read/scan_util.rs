@@ -71,16 +71,16 @@ struct ScanMetricsSet {
     rg_inverted_filtered: usize,
     /// Number of row groups filtered by min-max index.
     rg_minmax_filtered: usize,
-    /// Number of row groups filtered by bloom filter index.
-    rg_bloom_filtered: usize,
+    /// Number of row groups filtered by cuckoo filter index.
+    rg_cuckoo_filtered: usize,
     /// Number of rows in row group before filtering.
     rows_before_filter: usize,
     /// Number of rows in row group filtered by fulltext index.
     rows_fulltext_filtered: usize,
     /// Number of rows in row group filtered by inverted index.
     rows_inverted_filtered: usize,
-    /// Number of rows in row group filtered by bloom filter index.
-    rows_bloom_filtered: usize,
+    /// Number of rows in row group filtered by cuckoo filter index.
+    rows_cuckoo_filtered: usize,
     /// Number of rows filtered by precise filter.
     rows_precise_filtered: usize,
     /// Number of record batches read from SST.
@@ -112,11 +112,11 @@ impl fmt::Debug for ScanMetricsSet {
             rg_fulltext_filtered,
             rg_inverted_filtered,
             rg_minmax_filtered,
-            rg_bloom_filtered,
+            rg_cuckoo_filtered,
             rows_before_filter,
             rows_fulltext_filtered,
             rows_inverted_filtered,
-            rows_bloom_filtered,
+            rows_cuckoo_filtered,
             rows_precise_filtered,
             num_sst_record_batches,
             num_sst_batches,
@@ -141,11 +141,11 @@ impl fmt::Debug for ScanMetricsSet {
             rg_fulltext_filtered={rg_fulltext_filtered}, \
             rg_inverted_filtered={rg_inverted_filtered}, \
             rg_minmax_filtered={rg_minmax_filtered}, \
-            rg_bloom_filtered={rg_bloom_filtered}, \
+            rg_cuckoo_filtered={rg_cuckoo_filtered}, \
             rows_before_filter={rows_before_filter}, \
             rows_fulltext_filtered={rows_fulltext_filtered}, \
             rows_inverted_filtered={rows_inverted_filtered}, \
-            rows_bloom_filtered={rows_bloom_filtered}, \
+            rows_cuckoo_filtered={rows_cuckoo_filtered}, \
             rows_precise_filtered={rows_precise_filtered}, \
             num_sst_record_batches={num_sst_record_batches}, \
             num_sst_batches={num_sst_batches}, \
@@ -196,11 +196,11 @@ impl ScanMetricsSet {
                     rg_fulltext_filtered,
                     rg_inverted_filtered,
                     rg_minmax_filtered,
-                    rg_bloom_filtered,
+                    rg_cuckoo_filtered,
                     rows_total,
                     rows_fulltext_filtered,
                     rows_inverted_filtered,
-                    rows_bloom_filtered,
+                    rows_cuckoo_filtered,
                     rows_precise_filtered,
                 },
             num_record_batches,
@@ -215,12 +215,12 @@ impl ScanMetricsSet {
         self.rg_fulltext_filtered += *rg_fulltext_filtered;
         self.rg_inverted_filtered += *rg_inverted_filtered;
         self.rg_minmax_filtered += *rg_minmax_filtered;
-        self.rg_bloom_filtered += *rg_bloom_filtered;
+        self.rg_cuckoo_filtered += *rg_cuckoo_filtered;
 
         self.rows_before_filter += *rows_total;
         self.rows_fulltext_filtered += *rows_fulltext_filtered;
         self.rows_inverted_filtered += *rows_inverted_filtered;
-        self.rows_bloom_filtered += *rows_bloom_filtered;
+        self.rows_cuckoo_filtered += *rows_cuckoo_filtered;
         self.rows_precise_filtered += *rows_precise_filtered;
 
         self.num_sst_record_batches += *num_record_batches;
@@ -268,8 +268,8 @@ impl ScanMetricsSet {
             .with_label_values(&["minmax_index_filtered"])
             .inc_by(self.rg_minmax_filtered as u64);
         READ_ROW_GROUPS_TOTAL
-            .with_label_values(&["bloom_filter_index_filtered"])
-            .inc_by(self.rg_bloom_filtered as u64);
+            .with_label_values(&["cuckoo_filter_index_filtered"])
+            .inc_by(self.rg_cuckoo_filtered as u64);
 
         PRECISE_FILTER_ROWS_TOTAL
             .with_label_values(&["parquet"])
@@ -284,8 +284,8 @@ impl ScanMetricsSet {
             .with_label_values(&["inverted_index_filtered"])
             .inc_by(self.rows_inverted_filtered as u64);
         READ_ROWS_IN_ROW_GROUP_TOTAL
-            .with_label_values(&["bloom_filter_index_filtered"])
-            .inc_by(self.rows_bloom_filtered as u64);
+            .with_label_values(&["cuckoo_filter_index_filtered"])
+            .inc_by(self.rows_cuckoo_filtered as u64);
     }
 }
 

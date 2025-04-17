@@ -155,7 +155,7 @@ pub fn as_fulltext_option_analyzer(analyzer: Analyzer) -> FulltextAnalyzer {
 /// Tries to construct a `FulltextBackend` from the given backend.
 pub fn as_fulltext_option_backend(backend: PbFulltextBackend) -> FulltextBackend {
     match backend {
-        PbFulltextBackend::Bloom => FulltextBackend::Bloom,
+        PbFulltextBackend::Cuckoo => FulltextBackend::Cuckoo,
         PbFulltextBackend::Tantivy => FulltextBackend::Tantivy,
     }
 }
@@ -163,7 +163,7 @@ pub fn as_fulltext_option_backend(backend: PbFulltextBackend) -> FulltextBackend
 /// Tries to construct a `SkippingIndexType` from the given skipping index type.
 pub fn as_skipping_index_type(skipping_index_type: PbSkippingIndexType) -> SkippingIndexType {
     match skipping_index_type {
-        PbSkippingIndexType::BloomFilter => SkippingIndexType::BloomFilter,
+        PbSkippingIndexType::CuckooFilter => SkippingIndexType::CuckooFilter,
     }
 }
 
@@ -230,14 +230,14 @@ mod tests {
                 enable: true,
                 analyzer: FulltextAnalyzer::English,
                 case_sensitive: false,
-                backend: FulltextBackend::Bloom,
+                backend: FulltextBackend::Cuckoo,
             })
             .unwrap();
         schema.set_inverted_index(true);
         let options = options_from_column_schema(&schema).unwrap();
         assert_eq!(
             options.options.get(FULLTEXT_GRPC_KEY).unwrap(),
-            "{\"enable\":true,\"analyzer\":\"English\",\"case-sensitive\":false,\"backend\":\"bloom\"}"
+            "{\"enable\":true,\"analyzer\":\"English\",\"case-sensitive\":false,\"backend\":\"cuckoo\"}"
         );
         assert_eq!(
             options.options.get(INVERTED_INDEX_GRPC_KEY).unwrap(),
@@ -251,12 +251,12 @@ mod tests {
             enable: true,
             analyzer: FulltextAnalyzer::English,
             case_sensitive: false,
-            backend: FulltextBackend::Bloom,
+            backend: FulltextBackend::Cuckoo,
         };
         let options = options_from_fulltext(&fulltext).unwrap().unwrap();
         assert_eq!(
             options.options.get(FULLTEXT_GRPC_KEY).unwrap(),
-            "{\"enable\":true,\"analyzer\":\"English\",\"case-sensitive\":false,\"backend\":\"bloom\"}"
+            "{\"enable\":true,\"analyzer\":\"English\",\"case-sensitive\":false,\"backend\":\"cuckoo\"}"
         );
     }
 

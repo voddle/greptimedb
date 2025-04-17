@@ -16,34 +16,34 @@ use asynchronous_codec::{BytesMut, Decoder, Encoder};
 use bytes::{Buf, BufMut};
 use snafu::{ensure, ResultExt};
 
-use crate::bloom_filter::creator::finalize_segment::FinalizedBloomFilterSegment;
-use crate::bloom_filter::error::{Error, InvalidIntermediateMagicSnafu, IoSnafu, Result};
+use crate::cuckoo_filter::creator::finalize_segment::FinalizedCuckooFilterSegment;
+use crate::cuckoo_filter::error::{Error, InvalidIntermediateMagicSnafu, IoSnafu, Result};
 
-/// The magic number for the codec version 1 of the intermediate bloom filter.
+/// The magic number for the codec version 1 of the intermediate cuckoo filter.
 const CODEC_V1_MAGIC: &[u8; 4] = b"bi01";
 
-/// Codec of the intermediate finalized bloom filter segment.
+/// Codec of the intermediate finalized cuckoo filter segment.
 ///
 /// # Format
 ///
-/// [ magic ][ elem count ][    size    ][ bloom filter ][ elem count ][    size    ][ bloom filter ]...
+/// [ magic ][ elem count ][    size    ][ cuckoo filter ][ elem count ][    size    ][ cuckoo filter ]...
 ///    [4]       [8]            [8]           [size]         [8]            [8]           [size]
 #[derive(Debug, Default)]
-pub struct IntermediateBloomFilterCodecV1 {
+pub struct IntermediateCuckooFilterCodecV1 {
     handled_header_magic: bool,
 }
 
-impl Encoder for IntermediateBloomFilterCodecV1 {
-    type Item<'a> = FinalizedBloomFilterSegment;
+impl Encoder for IntermediateCuckooFilterCodecV1 {
+    type Item<'a> = FinalizedCuckooFilterSegment;
     type Error = Error;
 
-    fn encode(&mut self, item: FinalizedBloomFilterSegment, dst: &mut BytesMut) -> Result<()> {
+    fn encode(&mut self, item: FinalizedCuckooFilterSegment, dst: &mut BytesMut) -> Result<()> {
         if !self.handled_header_magic {
             dst.extend_from_slice(CODEC_V1_MAGIC);
             self.handled_header_magic = true;
         }
 
-        let segment_bytes = item.bloom_filter_bytes;
+        let segment_bytes = item.cuckoo_filter_bytes;
         let elem_count = item.element_count;
 
         dst.reserve(2 * std::mem::size_of::<u64>() + segment_bytes.len());
@@ -54,8 +54,8 @@ impl Encoder for IntermediateBloomFilterCodecV1 {
     }
 }
 
-impl Decoder for IntermediateBloomFilterCodecV1 {
-    type Item = FinalizedBloomFilterSegment;
+impl Decoder for IntermediateCuckooFilterCodecV1 {
+    type Item = FinalizedCuckooFilterSegment;
     type Error = Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>> {
@@ -90,11 +90,11 @@ impl Decoder for IntermediateBloomFilterCodecV1 {
             return Ok(None);
         }
 
-        let bloom_filter_bytes = s[n_size..n_size + segment_size].to_vec();
+        let cuckoo_filter_bytes = s[n_size..n_size + segment_size].to_vec();
         src.advance(n_size + segment_size);
-        Ok(Some(FinalizedBloomFilterSegment {
+        Ok(Some(FinalizedCuckooFilterSegment {
             element_count,
-            bloom_filter_bytes,
+            cuckoo_filter_bytes,
         }))
     }
 }
@@ -115,24 +115,24 @@ mod tests {
     use futures::{SinkExt, StreamExt};
 
     use super::*;
-    use crate::bloom_filter::creator::finalize_segment::FinalizedBloomFilterSegment;
+    use crate::cuckoo_filter::creator::finalize_segment::FinalizedCuckooFilterSegment;
 
     #[test]
-    fn test_intermediate_bloom_filter_codec_v1_basic() {
-        let mut encoder = IntermediateBloomFilterCodecV1::default();
+    fn test_intermediate_cuckoo_filter_codec_v1_basic() {
+        let mut encoder = IntermediateCuckooFilterCodecV1::default();
         let mut buf = BytesMut::new();
 
-        let item1 = FinalizedBloomFilterSegment {
+        let item1 = FinalizedCuckooFilterSegment {
             element_count: 2,
-            bloom_filter_bytes: vec![1, 2, 3, 4],
+            cuckoo_filter_bytes: vec![1, 2, 3, 4],
         };
-        let item2 = FinalizedBloomFilterSegment {
+        let item2 = FinalizedCuckooFilterSegment {
             element_count: 3,
-            bloom_filter_bytes: vec![5, 6, 7, 8],
+            cuckoo_filter_bytes: vec![5, 6, 7, 8],
         };
-        let item3 = FinalizedBloomFilterSegment {
+        let item3 = FinalizedCuckooFilterSegment {
             element_count: 4,
-            bloom_filter_bytes: vec![9, 10, 11, 12],
+            cuckoo_filter_bytes: vec![9, 10, 11, 12],
         };
 
         encoder.encode(item1.clone(), &mut buf).unwrap();
@@ -141,7 +141,7 @@ mod tests {
 
         let mut buf = buf.freeze().try_into_mut().unwrap();
 
-        let mut decoder = IntermediateBloomFilterCodecV1::default();
+        let mut decoder = IntermediateCuckooFilterCodecV1::default();
         let decoded_item1 = decoder.decode(&mut buf).unwrap().unwrap();
         let decoded_item2 = decoder.decode(&mut buf).unwrap().unwrap();
         let decoded_item3 = decoder.decode(&mut buf).unwrap().unwrap();
@@ -152,23 +152,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_intermediate_bloom_filter_codec_v1_frame_read_write() {
-        let item1 = FinalizedBloomFilterSegment {
+    async fn test_intermediate_cuckoo_filter_codec_v1_frame_read_write() {
+        let item1 = FinalizedCuckooFilterSegment {
             element_count: 2,
-            bloom_filter_bytes: vec![1, 2, 3, 4],
+            cuckoo_filter_bytes: vec![1, 2, 3, 4],
         };
-        let item2 = FinalizedBloomFilterSegment {
+        let item2 = FinalizedCuckooFilterSegment {
             element_count: 3,
-            bloom_filter_bytes: vec![5, 6, 7, 8],
+            cuckoo_filter_bytes: vec![5, 6, 7, 8],
         };
-        let item3 = FinalizedBloomFilterSegment {
+        let item3 = FinalizedCuckooFilterSegment {
             element_count: 4,
-            bloom_filter_bytes: vec![9, 10, 11, 12],
+            cuckoo_filter_bytes: vec![9, 10, 11, 12],
         };
 
         let mut bytes = Cursor::new(vec![]);
 
-        let mut writer = FramedWrite::new(&mut bytes, IntermediateBloomFilterCodecV1::default());
+        let mut writer = FramedWrite::new(&mut bytes, IntermediateCuckooFilterCodecV1::default());
         writer.send(item1.clone()).await.unwrap();
         writer.send(item2.clone()).await.unwrap();
         writer.send(item3.clone()).await.unwrap();
@@ -177,7 +177,7 @@ mod tests {
 
         let bytes = bytes.into_inner();
         let mut reader =
-            FramedRead::new(bytes.as_slice(), IntermediateBloomFilterCodecV1::default());
+            FramedRead::new(bytes.as_slice(), IntermediateCuckooFilterCodecV1::default());
         let decoded_item1 = reader.next().await.unwrap().unwrap();
         let decoded_item2 = reader.next().await.unwrap().unwrap();
         let decoded_item3 = reader.next().await.unwrap().unwrap();
@@ -189,37 +189,37 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_intermediate_bloom_filter_codec_v1_frame_read_write_only_magic() {
+    async fn test_intermediate_cuckoo_filter_codec_v1_frame_read_write_only_magic() {
         let bytes = CODEC_V1_MAGIC.to_vec();
         let mut reader =
-            FramedRead::new(bytes.as_slice(), IntermediateBloomFilterCodecV1::default());
+            FramedRead::new(bytes.as_slice(), IntermediateCuckooFilterCodecV1::default());
         assert!(reader.next().await.is_none());
     }
 
     #[tokio::test]
-    async fn test_intermediate_bloom_filter_codec_v1_frame_read_write_partial_magic() {
+    async fn test_intermediate_cuckoo_filter_codec_v1_frame_read_write_partial_magic() {
         let bytes = CODEC_V1_MAGIC[..3].to_vec();
         let mut reader =
-            FramedRead::new(bytes.as_slice(), IntermediateBloomFilterCodecV1::default());
+            FramedRead::new(bytes.as_slice(), IntermediateCuckooFilterCodecV1::default());
         let e = reader.next().await.unwrap();
         assert!(e.is_err());
     }
 
     #[tokio::test]
-    async fn test_intermediate_bloom_filter_codec_v1_frame_read_write_partial_item() {
+    async fn test_intermediate_cuckoo_filter_codec_v1_frame_read_write_partial_item() {
         let mut bytes = vec![];
         bytes.extend_from_slice(CODEC_V1_MAGIC);
         bytes.extend_from_slice(&2u64.to_le_bytes());
         bytes.extend_from_slice(&4u64.to_le_bytes());
 
         let mut reader =
-            FramedRead::new(bytes.as_slice(), IntermediateBloomFilterCodecV1::default());
+            FramedRead::new(bytes.as_slice(), IntermediateCuckooFilterCodecV1::default());
         let e = reader.next().await.unwrap();
         assert!(e.is_err());
     }
 
     #[tokio::test]
-    async fn test_intermediate_bloom_filter_codec_v1_frame_read_write_corrupted_magic() {
+    async fn test_intermediate_cuckoo_filter_codec_v1_frame_read_write_corrupted_magic() {
         let mut bytes = vec![];
         bytes.extend_from_slice(b"bi02");
         bytes.extend_from_slice(&2u64.to_le_bytes());
@@ -227,13 +227,13 @@ mod tests {
         bytes.extend_from_slice(&[1, 2, 3, 4]);
 
         let mut reader =
-            FramedRead::new(bytes.as_slice(), IntermediateBloomFilterCodecV1::default());
+            FramedRead::new(bytes.as_slice(), IntermediateCuckooFilterCodecV1::default());
         let e = reader.next().await.unwrap();
         assert!(e.is_err());
     }
 
     #[tokio::test]
-    async fn test_intermediate_bloom_filter_codec_v1_frame_read_write_corrupted_length() {
+    async fn test_intermediate_cuckoo_filter_codec_v1_frame_read_write_corrupted_length() {
         let mut bytes = vec![];
         bytes.extend_from_slice(CODEC_V1_MAGIC);
         bytes.extend_from_slice(&2u64.to_le_bytes());
@@ -241,7 +241,7 @@ mod tests {
         bytes.extend_from_slice(&[1, 2, 3]);
 
         let mut reader =
-            FramedRead::new(bytes.as_slice(), IntermediateBloomFilterCodecV1::default());
+            FramedRead::new(bytes.as_slice(), IntermediateCuckooFilterCodecV1::default());
         let e = reader.next().await.unwrap();
         assert!(e.is_err());
     }

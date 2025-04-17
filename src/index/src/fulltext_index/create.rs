@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod bloom_filter;
+mod cuckoo_filter;
 mod tantivy;
 
 use async_trait::async_trait;
 use puffin::puffin_manager::{PuffinWriter, PutOptions};
 
-pub use crate::fulltext_index::create::bloom_filter::BloomFilterFulltextIndexCreator;
+pub use crate::fulltext_index::create::cuckoo_filter::CuckooFilterFulltextIndexCreator;
 pub use crate::fulltext_index::create::tantivy::{
     TantivyFulltextIndexCreator, ROWID_FIELD_NAME, TEXT_FIELD_NAME,
 };

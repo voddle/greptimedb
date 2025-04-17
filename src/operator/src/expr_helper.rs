@@ -585,8 +585,8 @@ pub(crate) fn to_alter_table_expr(
                     },
                     case_sensitive: options.case_sensitive,
                     backend: match options.backend {
-                        FulltextBackend::Bloom => PbFulltextBackend::Bloom.into(),
                         FulltextBackend::Tantivy => PbFulltextBackend::Tantivy.into(),
+                        FulltextBackend::Cuckoo => PbFulltextBackend::Cuckoo.into(),
                     },
                 })),
             },
@@ -604,7 +604,7 @@ pub(crate) fn to_alter_table_expr(
                     enable: true,
                     granularity: options.granularity as u64,
                     skipping_index_type: match options.index_type {
-                        SkippingIndexType::BloomFilter => PbSkippingIndexType::BloomFilter.into(),
+                        SkippingIndexType::CuckooFilter => PbSkippingIndexType::CuckooFilter.into(),
                     },
                 })),
             },

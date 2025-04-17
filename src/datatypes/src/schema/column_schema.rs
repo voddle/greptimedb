@@ -538,14 +538,14 @@ impl fmt::Display for FulltextOptions {
 pub enum FulltextBackend {
     #[default]
     Tantivy,
-    Bloom, // TODO(zhongzc): when bloom is ready, use it as default
+    Cuckoo, // TODO(zhongzc): when cuckoo is ready, use it as default
 }
 
 impl fmt::Display for FulltextBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             FulltextBackend::Tantivy => write!(f, "tantivy"),
-            FulltextBackend::Bloom => write!(f, "bloom"),
+            FulltextBackend::Cuckoo => write!(f, "cuckoo"),
         }
     }
 }
@@ -600,11 +600,11 @@ impl TryFrom<HashMap<String, String>> for FulltextOptions {
 
         if let Some(backend) = options.get(COLUMN_FULLTEXT_OPT_KEY_BACKEND) {
             match backend.to_ascii_lowercase().as_str() {
-                "bloom" => fulltext_options.backend = FulltextBackend::Bloom,
+                "cuckoo" => fulltext_options.backend = FulltextBackend::Cuckoo,
                 "tantivy" => fulltext_options.backend = FulltextBackend::Tantivy,
                 _ => {
                     return InvalidFulltextOptionSnafu {
-                        msg: format!("{backend}, expected: 'bloom' | 'tantivy'"),
+                        msg: format!("{backend}, expected: 'cuckoo' | 'tantivy'"),
                     }
                     .fail();
                 }
@@ -664,13 +664,13 @@ impl fmt::Display for SkippingIndexOptions {
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize, Visit, VisitMut)]
 pub enum SkippingIndexType {
     #[default]
-    BloomFilter,
+    CuckooFilter,
 }
 
 impl fmt::Display for SkippingIndexType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SkippingIndexType::BloomFilter => write!(f, "BLOOM"),
+            SkippingIndexType::CuckooFilter => write!(f, "CUCKOO"),
         }
     }
 }
@@ -690,13 +690,13 @@ impl TryFrom<HashMap<String, String>> for SkippingIndexOptions {
             None => DEFAULT_GRANULARITY,
         };
 
-        // Parse index type with default value BloomFilter
+        // Parse index type with default value CuckooFilter
         let index_type = match options.get(COLUMN_SKIPPING_INDEX_OPT_KEY_TYPE) {
             Some(typ) => match typ.to_ascii_uppercase().as_str() {
-                "BLOOM" => SkippingIndexType::BloomFilter,
+                "CUCKOO" => SkippingIndexType::CuckooFilter,
                 _ => {
                     return error::InvalidSkippingIndexOptionSnafu {
-                        msg: format!("Invalid index type: {typ}, expected: 'BLOOM'"),
+                        msg: format!("Invalid index type: {typ}, expected: 'CUCKOO'"),
                     }
                     .fail();
                 }

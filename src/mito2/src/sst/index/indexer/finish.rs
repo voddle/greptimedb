@@ -15,13 +15,13 @@
 use common_telemetry::{debug, warn};
 use puffin::puffin_manager::{PuffinManager, PuffinWriter};
 
-use crate::sst::index::bloom_filter::creator::BloomFilterIndexer;
+use crate::sst::index::cuckoo_filter::creator::CuckooFilterIndexer;
 use crate::sst::index::fulltext_index::creator::FulltextIndexer;
 use crate::sst::index::inverted_index::creator::InvertedIndexer;
 use crate::sst::index::puffin_manager::SstPuffinWriter;
 use crate::sst::index::statistics::{ByteCount, RowCount};
 use crate::sst::index::{
-    BloomFilterOutput, FulltextIndexOutput, IndexOutput, Indexer, InvertedIndexOutput,
+    CuckooFilterOutput, FulltextIndexOutput, IndexOutput, Indexer, InvertedIndexOutput,
 };
 
 impl Indexer {
@@ -49,7 +49,7 @@ impl Indexer {
             return IndexOutput::default();
         }
 
-        let success = self.do_finish_bloom_filter(&mut writer, &mut output).await;
+        let success = self.do_finish_cuckoo_filter(&mut writer, &mut output).await;
         if !success {
             self.do_abort().await;
             return IndexOutput::default();
@@ -178,19 +178,19 @@ impl Indexer {
         false
     }
 
-    async fn do_finish_bloom_filter(
+    async fn do_finish_cuckoo_filter(
         &mut self,
         puffin_writer: &mut SstPuffinWriter,
         index_output: &mut IndexOutput,
     ) -> bool {
-        let Some(mut indexer) = self.bloom_filter_indexer.take() else {
+        let Some(mut indexer) = self.cuckoo_filter_indexer.take() else {
             return true;
         };
 
         let err = match indexer.finish(puffin_writer).await {
             Ok((row_count, byte_count)) => {
-                self.fill_bloom_filter_output(
-                    &mut index_output.bloom_filter,
+                self.fill_cuckoo_filter_output(
+                    &mut index_output.cuckoo_filter,
                     row_count,
                     byte_count,
                     &indexer,
@@ -202,12 +202,12 @@ impl Indexer {
 
         if cfg!(any(test, feature = "test")) {
             panic!(
-                "Failed to finish bloom filter, region_id: {}, file_id: {}, err: {:?}",
+                "Failed to finish cuckoo filter, region_id: {}, file_id: {}, err: {:?}",
                 self.region_id, self.file_id, err
             );
         } else {
             warn!(
-                err; "Failed to finish bloom filter, region_id: {}, file_id: {}",
+                err; "Failed to finish cuckoo filter, region_id: {}, file_id: {}",
                 self.region_id, self.file_id,
             );
         }
@@ -249,15 +249,15 @@ impl Indexer {
         output.columns = indexer.column_ids().collect();
     }
 
-    fn fill_bloom_filter_output(
+    fn fill_cuckoo_filter_output(
         &mut self,
-        output: &mut BloomFilterOutput,
+        output: &mut CuckooFilterOutput,
         row_count: RowCount,
         byte_count: ByteCount,
-        indexer: &BloomFilterIndexer,
+        indexer: &CuckooFilterIndexer,
     ) {
         debug!(
-            "Bloom filter created, region_id: {}, file_id: {}, written_bytes: {}, written_rows: {}",
+            "Cuckoo filter created, region_id: {}, file_id: {}, written_bytes: {}, written_rows: {}",
             self.region_id, self.file_id, byte_count, row_count
         );
 

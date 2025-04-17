@@ -88,7 +88,7 @@ fn alter_column_fulltext_options() -> RegionAlterRequest {
                     enable: true,
                     analyzer: FulltextAnalyzer::English,
                     case_sensitive: false,
-                    backend: FulltextBackend::Bloom,
+                    backend: FulltextBackend::Cuckoo,
                 },
             },
         },
@@ -557,7 +557,7 @@ async fn test_alter_column_fulltext_options() {
         enable: true,
         analyzer: FulltextAnalyzer::English,
         case_sensitive: false,
-        backend: FulltextBackend::Bloom,
+        backend: FulltextBackend::Cuckoo,
     };
     let check_fulltext_options = |engine: &MitoEngine, expected: &FulltextOptions| {
         let current_fulltext_options = engine

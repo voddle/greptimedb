@@ -1601,7 +1601,7 @@ mod tests {
                     enable: true,
                     analyzer: FulltextAnalyzer::Chinese,
                     case_sensitive: false,
-                    backend: FulltextBackend::Bloom,
+                    backend: FulltextBackend::Cuckoo,
                 },
             },
         };

@@ -19,7 +19,7 @@ use std::sync::Arc;
 use common_telemetry::warn;
 use datatypes::schema::{FulltextAnalyzer, FulltextBackend};
 use index::fulltext_index::create::{
-    BloomFilterFulltextIndexCreator, FulltextIndexCreator, TantivyFulltextIndexCreator,
+    CuckooFilterFulltextIndexCreator, FulltextIndexCreator, TantivyFulltextIndexCreator,
 };
 use index::fulltext_index::{Analyzer, Config};
 use puffin::blob_metadata::CompressionCodec;
@@ -60,7 +60,7 @@ impl FulltextIndexer {
         intermediate_manager: &IntermediateManager,
         metadata: &RegionMetadataRef,
         compress: bool,
-        bloom_row_granularity: usize,
+        cuckoo_row_granularity: usize,
         mem_limit: usize,
     ) -> Result<Option<Self>> {
         let mut creators = HashMap::new();
@@ -98,15 +98,15 @@ impl FulltextIndexer {
                         .context(CreateFulltextCreatorSnafu)?;
                     AltFulltextCreator::Tantivy(creator)
                 }
-                FulltextBackend::Bloom => {
+                FulltextBackend::Cuckoo => {
                     let temp_file_provider = Arc::new(TempFileProvider::new(
                         IntermediateLocation::new(&metadata.region_id, sst_file_id),
                         intermediate_manager.clone(),
                     ));
                     let global_memory_usage = Arc::new(AtomicUsize::new(0));
-                    let creator = BloomFilterFulltextIndexCreator::new(
+                    let creator = CuckooFilterFulltextIndexCreator::new(
                         config,
-                        bloom_row_granularity,
+                        cuckoo_row_granularity,
                         temp_file_provider,
                         global_memory_usage,
                         Some(mem_limit),
@@ -296,7 +296,7 @@ impl SingleCreator {
 /// `AltFulltextCreator` is an alternative fulltext index creator that can be either Tantivy or BloomFilter.
 enum AltFulltextCreator {
     Tantivy(TantivyFulltextIndexCreator),
-    Bloom(BloomFilterFulltextIndexCreator),
+    Bloom(CuckooFilterFulltextIndexCreator),
 }
 
 impl AltFulltextCreator {

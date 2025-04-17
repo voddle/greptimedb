@@ -1810,7 +1810,7 @@ mod tests {
                     enable: true,
                     analyzer: FulltextAnalyzer::Chinese,
                     case_sensitive: true,
-                    backend: FulltextBackend::Bloom,
+                    backend: FulltextBackend::Cuckoo,
                 },
             },
         };

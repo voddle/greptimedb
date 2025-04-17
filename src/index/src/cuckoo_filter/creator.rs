@@ -20,40 +20,40 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::str;
 
-use finalize_segment::FinalizedBloomFilterStorage;
+use finalize_segment::FinalizedCuckooFilterStorage;
 use futures::{AsyncWrite, AsyncWriteExt, StreamExt};
-use greptime_proto::v1::index::{BloomFilterLoc, BloomFilterMeta};
+use greptime_proto::v1::index::{CuckooFilterLoc, CuckooFilterMeta};
 use prost::Message;
 use snafu::ResultExt;
 
-use crate::bloom_filter::error::{IoSnafu, Result};
-use crate::bloom_filter::SEED;
+use crate::cuckoo_filter::error::{IoSnafu, Result};
+use crate::cuckoo_filter::SEED;
 use crate::external_provider::ExternalTempFileProvider;
 use crate::Bytes;
 
-/// The false positive rate of the Bloom filter.
+/// The false positive rate of the Cuckoo filter.
 pub const FALSE_POSITIVE_RATE: f64 = 0.01;
 
-/// `BloomFilterCreator` is responsible for creating and managing bloom filters
+/// `CuckooFilterCreator` is responsible for creating and managing cuckoo filters
 /// for a set of elements. It divides the rows into segments and creates
-/// bloom filters for each segment.
+/// cuckoo filters for each segment.
 ///
 /// # Format
 ///
-/// The bloom filter creator writes the following format to the writer:
+/// The cuckoo filter creator writes the following format to the writer:
 ///
 /// ```text
 /// +--------------------+--------------------+-----+----------------------+----------------------+
-/// | Bloom filter 0     | Bloom filter 1     | ... | BloomFilterMeta      | Meta size            |
+/// | Cuckoo filter 0     | Cuckoo filter 1     | ... | CuckooFilterMeta      | Meta size            |
 /// +--------------------+--------------------+-----+----------------------+----------------------+
 /// |<- bytes (size 0) ->|<- bytes (size 1) ->| ... |<- json (meta size) ->|<- u32 LE (4 bytes) ->|
 /// ```
 ///
-pub struct BloomFilterCreator {
+pub struct CuckooFilterCreator {
     /// The number of rows per segment set by the user.
     rows_per_segment: usize,
 
-    /// Row count that added to the bloom filter so far.
+    /// Row count that added to the cuckoo filter so far.
     accumulated_row_count: usize,
 
     /// A set of distinct elements in the current segment.
@@ -62,18 +62,18 @@ pub struct BloomFilterCreator {
     /// The memory usage of the current segment's distinct elements.
     cur_seg_distinct_elems_mem_usage: usize,
 
-    /// Storage for finalized Bloom filters.
-    finalized_bloom_filters: FinalizedBloomFilterStorage,
+    /// Storage for finalized Cuckoo filters.
+    finalized_cuckoo_filters: FinalizedCuckooFilterStorage,
 
     /// Row count that finalized so far.
     finalized_row_count: usize,
 
-    /// Global memory usage of the bloom filter creator.
+    /// Global memory usage of the cuckoo filter creator.
     global_memory_usage: Arc<AtomicUsize>,
 }
 
-impl BloomFilterCreator {
-    /// Creates a new `BloomFilterCreator` with the specified number of rows per segment.
+impl CuckooFilterCreator {
+    /// Creates a new `CuckooFilterCreator` with the specified number of rows per segment.
     ///
     /// # PANICS
     ///
@@ -95,7 +95,7 @@ impl BloomFilterCreator {
             cur_seg_distinct_elems: HashSet::default(),
             cur_seg_distinct_elems_mem_usage: 0,
             global_memory_usage: global_memory_usage.clone(),
-            finalized_bloom_filters: FinalizedBloomFilterStorage::new(
+            finalized_cuckoo_filters: FinalizedCuckooFilterStorage::new(
                 intermediate_provider,
                 global_memory_usage,
                 global_memory_usage_threshold,
@@ -104,7 +104,7 @@ impl BloomFilterCreator {
         }
     }
 
-    /// Adds multiple rows of elements to the bloom filter. If the number of accumulated rows
+    /// Adds multiple rows of elements to the cuckoo filter. If the number of accumulated rows
     /// reaches `rows_per_segment`, it finalizes the current segment.
     pub async fn push_n_row_elems(
         &mut self,
@@ -148,7 +148,7 @@ impl BloomFilterCreator {
         Ok(())
     }
 
-    /// Adds a row of elements to the bloom filter. If the number of accumulated rows
+    /// Adds a row of elements to the cuckoo filter. If the number of accumulated rows
     /// reaches `rows_per_segment`, it finalizes the current segment.
     pub async fn push_row_elems(&mut self, elems: impl IntoIterator<Item = Bytes>) -> Result<()> {
         self.accumulated_row_count += 1;
@@ -173,36 +173,36 @@ impl BloomFilterCreator {
         Ok(())
     }
 
-    /// Finalizes any remaining segments and writes the bloom filters and metadata to the provided writer.
+    /// Finalizes any remaining segments and writes the cuckoo filters and metadata to the provided writer.
     pub async fn finish(&mut self, mut writer: impl AsyncWrite + Unpin) -> Result<()> {
         if self.accumulated_row_count > self.finalized_row_count {
             self.finalize_segment().await?;
         }
 
-        let mut meta = BloomFilterMeta {
+        let mut meta = CuckooFilterMeta {
             rows_per_segment: self.rows_per_segment as _,
             row_count: self.accumulated_row_count as _,
             ..Default::default()
         };
 
-        let (indices, mut segs) = self.finalized_bloom_filters.drain().await?;
+        let (indices, mut segs) = self.finalized_cuckoo_filters.drain().await?;
         meta.segment_loc_indices = indices.into_iter().map(|i| i as u64).collect();
         meta.segment_count = meta.segment_loc_indices.len() as _;
 
         while let Some(segment) = segs.next().await {
             let segment = segment?;
             writer
-                .write_all(&segment.bloom_filter_bytes)
+                .write_all(&segment.cuckoo_filter_bytes)
                 .await
                 .context(IoSnafu)?;
 
-            let size = segment.bloom_filter_bytes.len() as u64;
-            meta.bloom_filter_locs.push(BloomFilterLoc {
-                offset: meta.bloom_filter_size as _,
+            let size = segment.cuckoo_filter_bytes.len() as u64;
+            meta.cuckoo_filter_locs.push(CuckooFilterLoc {
+                offset: meta.cuckoo_filter_size as _,
                 size,
                 element_count: segment.element_count as _,
             });
-            meta.bloom_filter_size += size;
+            meta.cuckoo_filter_size += size;
         }
 
         let meta_bytes = meta.encode_to_vec();
@@ -218,14 +218,14 @@ impl BloomFilterCreator {
         Ok(())
     }
 
-    /// Returns the memory usage of the creating bloom filter.
+    /// Returns the memory usage of the creating cuckoo filter.
     pub fn memory_usage(&self) -> usize {
-        self.cur_seg_distinct_elems_mem_usage + self.finalized_bloom_filters.memory_usage()
+        self.cur_seg_distinct_elems_mem_usage + self.finalized_cuckoo_filters.memory_usage()
     }
 
     async fn finalize_segment(&mut self) -> Result<()> {
         let elem_count = self.cur_seg_distinct_elems.len();
-        self.finalized_bloom_filters
+        self.finalized_cuckoo_filters
             .add(self.cur_seg_distinct_elems.drain(), elem_count)
             .await?;
 
@@ -236,7 +236,7 @@ impl BloomFilterCreator {
     }
 }
 
-impl Drop for BloomFilterCreator {
+impl Drop for CuckooFilterCreator {
     fn drop(&mut self) {
         self.global_memory_usage
             .fetch_sub(self.cur_seg_distinct_elems_mem_usage, Ordering::Relaxed);
@@ -245,7 +245,7 @@ impl Drop for BloomFilterCreator {
 
 #[cfg(test)]
 mod tests {
-    // use fastbloom::BloomFilter;
+    // use fastcuckoo::CuckooFilter;
     use cuckoofilter::CuckooFilter;
     use futures::io::Cursor;
 
@@ -262,9 +262,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_bloom_filter_creator() {
+    async fn test_cuckoo_filter_creator() {
         let mut writer = Cursor::new(Vec::new());
-        let mut creator = BloomFilterCreator::new(
+        let mut creator = CuckooFilterCreator::new(
             2,
             Arc::new(MockExternalTempFileProvider::new()),
             Arc::new(AtomicUsize::new(0)),
@@ -301,27 +301,27 @@ mod tests {
         let meta_size = u32::from_le_bytes((&bytes[meta_size_offset..]).try_into().unwrap());
 
         let meta_bytes = &bytes[total_size - meta_size as usize - 4..total_size - 4];
-        let meta = BloomFilterMeta::decode(meta_bytes).unwrap();
+        let meta = CuckooFilterMeta::decode(meta_bytes).unwrap();
 
         assert_eq!(meta.rows_per_segment, 2);
         assert_eq!(meta.segment_count, 2);
         assert_eq!(meta.row_count, 3);
         assert_eq!(
-            meta.bloom_filter_size as usize + meta_bytes.len() + 4,
+            meta.cuckoo_filter_size as usize + meta_bytes.len() + 4,
             total_size
         );
 
         let mut bfs: Vec<CuckooFilter<DefaultHasher>> = Vec::new();
-        for segment in meta.bloom_filter_locs {
-            let bloom_filter_bytes =
+        for segment in meta.cuckoo_filter_locs {
+            let cuckoo_filter_bytes =
                 &bytes[segment.offset as usize..(segment.offset + segment.size) as usize];
-            // let v = u64_vec_from_bytes(bloom_filter_bytes);
+            // let v = u64_vec_from_bytes(cuckoo_filter_bytes);
             let export_cf = cuckoofilter::ExportedCuckooFilter {
-                values: bloom_filter_bytes.to_vec(),
+                values: cuckoo_filter_bytes.to_vec(),
                 length: segment.element_count as _,
             };
-            let bloom_filter: CuckooFilter<DefaultHasher> = CuckooFilter::from(export_cf);
-            bfs.push(bloom_filter);
+            let cuckoo_filter: CuckooFilter<DefaultHasher> = CuckooFilter::from(export_cf);
+            bfs.push(cuckoo_filter);
         }
 
         assert_eq!(meta.segment_loc_indices.len(), 2);
@@ -338,9 +338,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_bloom_filter_creator_batch_push() {
+    async fn test_cuckoo_filter_creator_batch_push() {
         let mut writer = Cursor::new(Vec::new());
-        let mut creator: BloomFilterCreator = BloomFilterCreator::new(
+        let mut creator: CuckooFilterCreator = CuckooFilterCreator::new(
             2,
             Arc::new(MockExternalTempFileProvider::new()),
             Arc::new(AtomicUsize::new(0)),
@@ -376,30 +376,30 @@ mod tests {
         let meta_size = u32::from_le_bytes((&bytes[meta_size_offset..]).try_into().unwrap());
 
         let meta_bytes = &bytes[total_size - meta_size as usize - 4..total_size - 4];
-        let meta = BloomFilterMeta::decode(meta_bytes).unwrap();
+        let meta = CuckooFilterMeta::decode(meta_bytes).unwrap();
 
         assert_eq!(meta.rows_per_segment, 2);
         assert_eq!(meta.segment_count, 10);
         assert_eq!(meta.row_count, 20);
         assert_eq!(
-            meta.bloom_filter_size as usize + meta_bytes.len() + 4,
+            meta.cuckoo_filter_size as usize + meta_bytes.len() + 4,
             total_size
         );
 
         let mut bfs: Vec<CuckooFilter<DefaultHasher>> = Vec::new();
-        for segment in meta.bloom_filter_locs {
-            let bloom_filter_bytes =
+        for segment in meta.cuckoo_filter_locs {
+            let cuckoo_filter_bytes =
                 &bytes[segment.offset as usize..(segment.offset + segment.size) as usize];
-            // let v = u64_vec_from_bytes(bloom_filter_bytes);
+            // let v = u64_vec_from_bytes(cuckoo_filter_bytes);
             let export_cf = cuckoofilter::ExportedCuckooFilter{
-                values: bloom_filter_bytes.to_vec(),
+                values: cuckoo_filter_bytes.to_vec(),
                 length: segment.element_count as _,
             };
-            let bloom_filter: CuckooFilter<DefaultHasher> = CuckooFilter::from(export_cf);
-            bfs.push(bloom_filter);
+            let cuckoo_filter: CuckooFilter<DefaultHasher> = CuckooFilter::from(export_cf);
+            bfs.push(cuckoo_filter);
         }
 
-        // 4 bloom filters to serve 10 segments
+        // 4 cuckoo filters to serve 10 segments
         assert_eq!(bfs.len(), 4);
         assert_eq!(meta.segment_loc_indices.len(), 10);
 
@@ -423,7 +423,7 @@ mod tests {
     #[tokio::test]
     async fn test_final_seg_all_null() {
         let mut writer = Cursor::new(Vec::new());
-        let mut creator = BloomFilterCreator::new(
+        let mut creator = CuckooFilterCreator::new(
             2,
             Arc::new(MockExternalTempFileProvider::new()),
             Arc::new(AtomicUsize::new(0)),
@@ -444,7 +444,7 @@ mod tests {
         let meta_size = u32::from_le_bytes((&bytes[meta_size_offset..]).try_into().unwrap());
 
         let meta_bytes = &bytes[total_size - meta_size as usize - 4..total_size - 4];
-        let meta = BloomFilterMeta::decode(meta_bytes).unwrap();
+        let meta = CuckooFilterMeta::decode(meta_bytes).unwrap();
 
         assert_eq!(meta.rows_per_segment, 2);
         assert_eq!(meta.segment_count, 3);

@@ -22,11 +22,11 @@ use puffin::puffin_manager::{PuffinWriter, PutOptions};
 use snafu::{OptionExt, ResultExt};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
-use crate::bloom_filter::creator::BloomFilterCreator;
+use crate::cuckoo_filter::creator::CuckooFilterCreator;
 use crate::external_provider::ExternalTempFileProvider;
 use crate::fulltext_index::create::FulltextIndexCreator;
 use crate::fulltext_index::error::{
-    AbortedSnafu, BiErrorsSnafu, BloomFilterFinishSnafu, ExternalSnafu, PuffinAddBlobSnafu, Result,
+    AbortedSnafu, BiErrorsSnafu, CuckooFilterFinishSnafu, ExternalSnafu, PuffinAddBlobSnafu, Result,
     SerializeToJsonSnafu,
 };
 use crate::fulltext_index::tokenizer::{Analyzer, ChineseTokenizer, EnglishTokenizer};
@@ -36,14 +36,14 @@ const PIPE_BUFFER_SIZE_FOR_SENDING_BLOB: usize = 8192;
 
 pub const KEY_FULLTEXT_CONFIG: &str = "fulltext_config";
 
-/// `BloomFilterFulltextIndexCreator` is for creating a fulltext index using a bloom filter.
-pub struct BloomFilterFulltextIndexCreator {
-    inner: Option<BloomFilterCreator>,
+/// `CuckooFilterFulltextIndexCreator` is for creating a fulltext index using a bloom filter.
+pub struct CuckooFilterFulltextIndexCreator {
+    inner: Option<CuckooFilterCreator>,
     analyzer: Analyzer,
     config: Config,
 }
 
-impl BloomFilterFulltextIndexCreator {
+impl CuckooFilterFulltextIndexCreator {
     pub fn new(
         config: Config,
         rows_per_segment: usize,
@@ -57,7 +57,7 @@ impl BloomFilterFulltextIndexCreator {
         };
         let analyzer = Analyzer::new(tokenizer, config.case_sensitive);
 
-        let inner = BloomFilterCreator::new(
+        let inner = CuckooFilterCreator::new(
             rows_per_segment,
             intermediate_provider,
             global_memory_usage,
@@ -72,7 +72,7 @@ impl BloomFilterFulltextIndexCreator {
 }
 
 #[async_trait]
-impl FulltextIndexCreator for BloomFilterFulltextIndexCreator {
+impl FulltextIndexCreator for CuckooFilterFulltextIndexCreator {
     async fn push_text(&mut self, text: &str) -> Result<()> {
         let tokens = self.analyzer.analyze_text(text)?;
         self.inner
@@ -110,7 +110,7 @@ impl FulltextIndexCreator for BloomFilterFulltextIndexCreator {
 
         match (
             puffin_add_blob.context(PuffinAddBlobSnafu),
-            index_finish.context(BloomFilterFinishSnafu),
+            index_finish.context(CuckooFilterFinishSnafu),
         ) {
             (Err(e1), Err(e2)) => BiErrorsSnafu {
                 first: Box::new(e1),

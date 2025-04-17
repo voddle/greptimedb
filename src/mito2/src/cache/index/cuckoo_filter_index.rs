@@ -15,12 +15,12 @@
 use std::ops::Range;
 use std::sync::Arc;
 
-use api::v1::index::BloomFilterMeta;
+use api::v1::index::CuckooFilterMeta;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::future::try_join_all;
-use index::bloom_filter::error::Result;
-use index::bloom_filter::reader::BloomFilterReader;
+use index::cuckoo_filter::error::Result;
+use index::cuckoo_filter::reader::CuckooFilterReader;
 use store_api::storage::ColumnId;
 
 use crate::cache::index::{IndexCache, PageKey, INDEX_METADATA_TYPE};
@@ -30,10 +30,10 @@ use crate::sst::file::FileId;
 const INDEX_TYPE_BLOOM_FILTER_INDEX: &str = "bloom_filter_index";
 
 /// Cache for bloom filter index.
-pub type BloomFilterIndexCache = IndexCache<(FileId, ColumnId), BloomFilterMeta>;
-pub type BloomFilterIndexCacheRef = Arc<BloomFilterIndexCache>;
+pub type CuckooFilterIndexCache = IndexCache<(FileId, ColumnId), CuckooFilterMeta>;
+pub type CuckooFilterIndexCacheRef = Arc<CuckooFilterIndexCache>;
 
-impl BloomFilterIndexCache {
+impl CuckooFilterIndexCache {
     /// Creates a new bloom filter index cache.
     pub fn new(index_metadata_cap: u64, index_content_cap: u64, page_size: u64) -> Self {
         Self::new_with_weighter(
@@ -48,10 +48,10 @@ impl BloomFilterIndexCache {
 }
 
 /// Calculates weight for bloom filter index metadata.
-fn bloom_filter_index_metadata_weight(k: &(FileId, ColumnId), _: &Arc<BloomFilterMeta>) -> u32 {
+fn bloom_filter_index_metadata_weight(k: &(FileId, ColumnId), _: &Arc<CuckooFilterMeta>) -> u32 {
     (k.0.as_bytes().len()
         + std::mem::size_of::<ColumnId>()
-        + std::mem::size_of::<BloomFilterMeta>()) as u32
+        + std::mem::size_of::<CuckooFilterMeta>()) as u32
 }
 
 /// Calculates weight for bloom filter index content.
@@ -59,23 +59,23 @@ fn bloom_filter_index_content_weight((k, _): &((FileId, ColumnId), PageKey), v: 
     (k.0.as_bytes().len() + std::mem::size_of::<ColumnId>() + v.len()) as u32
 }
 
-/// Bloom filter index blob reader with cache.
-pub struct CachedBloomFilterIndexBlobReader<R> {
+/// Cuckoo filter index blob reader with cache.
+pub struct CachedCuckooFilterIndexBlobReader<R> {
     file_id: FileId,
     column_id: ColumnId,
     blob_size: u64,
     inner: R,
-    cache: BloomFilterIndexCacheRef,
+    cache: CuckooFilterIndexCacheRef,
 }
 
-impl<R> CachedBloomFilterIndexBlobReader<R> {
+impl<R> CachedCuckooFilterIndexBlobReader<R> {
     /// Creates a new bloom filter index blob reader with cache.
     pub fn new(
         file_id: FileId,
         column_id: ColumnId,
         blob_size: u64,
         inner: R,
-        cache: BloomFilterIndexCacheRef,
+        cache: CuckooFilterIndexCacheRef,
     ) -> Self {
         Self {
             file_id,
@@ -88,7 +88,7 @@ impl<R> CachedBloomFilterIndexBlobReader<R> {
 }
 
 #[async_trait]
-impl<R: BloomFilterReader + Send> BloomFilterReader for CachedBloomFilterIndexBlobReader<R> {
+impl<R: CuckooFilterReader + Send> CuckooFilterReader for CachedCuckooFilterIndexBlobReader<R> {
     async fn range_read(&self, offset: u64, size: u32) -> Result<Bytes> {
         let inner = &self.inner;
         self.cache
@@ -122,7 +122,7 @@ impl<R: BloomFilterReader + Send> BloomFilterReader for CachedBloomFilterIndexBl
     }
 
     /// Reads the meta information of the bloom filter.
-    async fn metadata(&self) -> Result<BloomFilterMeta> {
+    async fn metadata(&self) -> Result<CuckooFilterMeta> {
         if let Some(cached) = self.cache.get_metadata((self.file_id, self.column_id)) {
             CACHE_HIT.with_label_values(&[INDEX_METADATA_TYPE]).inc();
             Ok((*cached).clone())

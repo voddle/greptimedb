@@ -116,8 +116,8 @@ pub struct MitoConfig {
     pub inverted_index: InvertedIndexConfig,
     /// Full-text index configs.
     pub fulltext_index: FulltextIndexConfig,
-    /// Bloom filter index configs.
-    pub bloom_filter_index: BloomFilterConfig,
+    /// Cuckoo filter index configs.
+    pub cuckoo_filter_index: CuckooFilterConfig,
 
     /// Memtable config
     pub memtable: MemtableConfig,
@@ -156,7 +156,7 @@ impl Default for MitoConfig {
             index: IndexConfig::default(),
             inverted_index: InvertedIndexConfig::default(),
             fulltext_index: FulltextIndexConfig::default(),
-            bloom_filter_index: BloomFilterConfig::default(),
+            cuckoo_filter_index: CuckooFilterConfig::default(),
             memtable: MemtableConfig::default(),
             min_compaction_interval: Duration::from_secs(0),
         };
@@ -503,11 +503,11 @@ impl FulltextIndexConfig {
     }
 }
 
-/// Configuration options for the bloom filter.
+/// Configuration options for the cuckoo filter.
 #[serde_as]
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(default)]
-pub struct BloomFilterConfig {
+pub struct CuckooFilterConfig {
     /// Whether to create the index on flush: automatically or never.
     pub create_on_flush: Mode,
     /// Whether to create the index on compaction: automatically or never.
@@ -518,7 +518,7 @@ pub struct BloomFilterConfig {
     pub mem_threshold_on_create: MemoryThreshold,
 }
 
-impl Default for BloomFilterConfig {
+impl Default for CuckooFilterConfig {
     fn default() -> Self {
         Self {
             create_on_flush: Mode::Auto,
@@ -529,7 +529,7 @@ impl Default for BloomFilterConfig {
     }
 }
 
-impl BloomFilterConfig {
+impl CuckooFilterConfig {
     pub fn mem_threshold_on_create(&self) -> Option<usize> {
         match self.mem_threshold_on_create {
             MemoryThreshold::Auto => {

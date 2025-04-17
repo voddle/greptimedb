@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use common_telemetry::{debug, warn};
 use datatypes::schema::SkippingIndexType;
-use index::bloom_filter::creator::BloomFilterCreator;
+use index::cuckoo_filter::creator::CuckooFilterCreator;
 use puffin::puffin_manager::{PuffinWriter, PutOptions};
 use snafu::{ensure, ResultExt};
 use store_api::metadata::RegionMetadataRef;
@@ -26,28 +26,28 @@ use store_api::storage::ColumnId;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use crate::error::{
-    BiErrorsSnafu, BloomFilterFinishSnafu, IndexOptionsSnafu, OperateAbortedIndexSnafu,
-    PuffinAddBlobSnafu, PushBloomFilterValueSnafu, Result,
+    BiErrorsSnafu, CuckooFilterFinishSnafu, IndexOptionsSnafu, OperateAbortedIndexSnafu,
+    PuffinAddBlobSnafu, PushCuckooFilterValueSnafu, Result,
 };
 use crate::read::Batch;
 use crate::row_converter::SortField;
 use crate::sst::file::FileId;
-use crate::sst::index::bloom_filter::INDEX_BLOB_TYPE;
+use crate::sst::index::cuckoo_filter::INDEX_BLOB_TYPE;
 use crate::sst::index::codec::{IndexValueCodec, IndexValuesCodec};
 use crate::sst::index::intermediate::{
     IntermediateLocation, IntermediateManager, TempFileProvider,
 };
 use crate::sst::index::puffin_manager::SstPuffinWriter;
 use crate::sst::index::statistics::{ByteCount, RowCount, Statistics};
-use crate::sst::index::TYPE_BLOOM_FILTER_INDEX;
+use crate::sst::index::TYPE_CUCKOO_FILTER_INDEX;
 
 /// The buffer size for the pipe used to send index data to the puffin blob.
 const PIPE_BUFFER_SIZE_FOR_SENDING_BLOB: usize = 8192;
 
-/// The indexer for the bloom filter index.
-pub struct BloomFilterIndexer {
-    /// The bloom filter creators.
-    creators: HashMap<ColumnId, BloomFilterCreator>,
+/// The indexer for the cuckoo filter index.
+pub struct CuckooFilterIndexer {
+    /// The cuckoo filter creators.
+    creators: HashMap<ColumnId, CuckooFilterCreator>,
 
     /// The provider for intermediate files.
     temp_file_provider: Arc<TempFileProvider>,
@@ -65,8 +65,8 @@ pub struct BloomFilterIndexer {
     global_memory_usage: Arc<AtomicUsize>,
 }
 
-impl BloomFilterIndexer {
-    /// Creates a new bloom filter indexer.
+impl CuckooFilterIndexer {
+    /// Creates a new cuckoo filter indexer.
     pub fn new(
         sst_file_id: FileId,
         metadata: &RegionMetadataRef,
@@ -91,11 +91,11 @@ impl BloomFilterIndexer {
                     })?;
 
             let options = match options {
-                Some(options) if options.index_type == SkippingIndexType::BloomFilter => options,
+                Some(options) if options.index_type == SkippingIndexType::CuckooFilter => options,
                 _ => continue,
             };
 
-            let creator = BloomFilterCreator::new(
+            let creator = CuckooFilterCreator::new(
                 options.granularity as _,
                 temp_file_provider.clone(),
                 global_memory_usage.clone(),
@@ -117,7 +117,7 @@ impl BloomFilterIndexer {
             temp_file_provider,
             codec,
             aborted: false,
-            stats: Statistics::new(TYPE_BLOOM_FILTER_INDEX),
+            stats: Statistics::new(TYPE_CUCKOO_FILTER_INDEX),
             global_memory_usage,
         };
         Ok(Some(indexer))
@@ -217,13 +217,13 @@ impl BloomFilterIndexer {
                     creator
                         .push_n_row_elems(n, elems)
                         .await
-                        .context(PushBloomFilterValueSnafu)?;
+                        .context(PushCuckooFilterValueSnafu)?;
                 }
                 // fields
                 None => {
                     let Some(values) = batch.field_col_value(*col_id) else {
                         debug!(
-                            "Column {} not found in the batch during building bloom filter index",
+                            "Column {} not found in the batch during building cuckoo filter index",
                             col_id
                         );
                         continue;
@@ -246,7 +246,7 @@ impl BloomFilterIndexer {
                         creator
                             .push_row_elems(elems)
                             .await
-                            .context(PushBloomFilterValueSnafu)?;
+                            .context(PushCuckooFilterValueSnafu)?;
                     }
                 }
             }
@@ -296,7 +296,7 @@ impl BloomFilterIndexer {
     /// TODO(zhongzc): duplicate with `mito2::sst::index::inverted_index::creator::InvertedIndexCreator`
     async fn do_finish_single_creator(
         col_id: &ColumnId,
-        creator: &mut BloomFilterCreator,
+        creator: &mut CuckooFilterCreator,
         puffin_writer: &mut SstPuffinWriter,
     ) -> Result<ByteCount> {
         let (tx, rx) = tokio::io::duplex(PIPE_BUFFER_SIZE_FOR_SENDING_BLOB);
@@ -314,7 +314,7 @@ impl BloomFilterIndexer {
 
         match (
             puffin_add_blob.context(PuffinAddBlobSnafu),
-            index_finish.context(BloomFilterFinishSnafu),
+            index_finish.context(CuckooFilterFinishSnafu),
         ) {
             (Err(e1), Err(e2)) => BiErrorsSnafu {
                 first: Box::new(e1),
@@ -353,7 +353,7 @@ pub(crate) mod tests {
     use datatypes::schema::{ColumnSchema, SkippingIndexOptions};
     use datatypes::value::ValueRef;
     use datatypes::vectors::{UInt64Vector, UInt8Vector};
-    use index::bloom_filter::reader::{BloomFilterReader, BloomFilterReaderImpl};
+    use index::cuckoo_filter::reader::{CuckooFilterReader, CuckooFilterReaderImpl};
     use object_store::services::Memory;
     use object_store::ObjectStore;
     use puffin::puffin_manager::{PuffinManager, PuffinReader};
@@ -388,7 +388,7 @@ pub(crate) mod tests {
 
     /// tag_str:
     ///   - type: string
-    ///   - index: bloom filter
+    ///   - index: cuckoo filter
     ///   - granularity: 2
     ///   - column_id: 1
     ///
@@ -399,7 +399,7 @@ pub(crate) mod tests {
     ///
     /// field_u64:
     ///   - type: uint64
-    ///   - index: bloom filter
+    ///   - index: cuckoo filter
     ///   - granularity: 4
     ///   - column_id: 3
     pub fn mock_region_metadata() -> RegionMetadataRef {
@@ -412,7 +412,7 @@ pub(crate) mod tests {
                     false,
                 )
                 .with_skipping_options(SkippingIndexOptions {
-                    index_type: SkippingIndexType::BloomFilter,
+                    index_type: SkippingIndexType::CuckooFilter,
                     granularity: 2,
                 })
                 .unwrap(),
@@ -435,7 +435,7 @@ pub(crate) mod tests {
                     false,
                 )
                 .with_skipping_options(SkippingIndexOptions {
-                    index_type: SkippingIndexType::BloomFilter,
+                    index_type: SkippingIndexType::CuckooFilter,
                     granularity: 4,
                 })
                 .unwrap(),
@@ -476,15 +476,15 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn test_bloom_filter_indexer() {
-        let prefix = "test_bloom_filter_indexer_";
+    async fn test_cuckoo_filter_indexer() {
+        let prefix = "test_cuckoo_filter_indexer_";
         let tempdir = common_test_util::temp_dir::create_temp_dir(prefix);
         let object_store = mock_object_store();
         let intm_mgr = new_intm_mgr(tempdir.path().to_string_lossy()).await;
         let region_metadata = mock_region_metadata();
         let memory_usage_threshold = Some(1024);
 
-        let mut indexer = BloomFilterIndexer::new(
+        let mut indexer = CuckooFilterIndexer::new(
             FileId::random(),
             &region_metadata,
             intm_mgr,
@@ -515,22 +515,22 @@ pub(crate) mod tests {
         // tag_str
         {
             let blob_guard = puffin_reader
-                .blob("greptime-bloom-filter-v1-1")
+                .blob("greptime-cuckoo-filter-v1-1")
                 .await
                 .unwrap();
             let reader = blob_guard.reader().await.unwrap();
-            let bloom_filter = BloomFilterReaderImpl::new(reader);
-            let metadata = bloom_filter.metadata().await.unwrap();
+            let cuckoo_filter = CuckooFilterReaderImpl::new(reader);
+            let metadata = cuckoo_filter.metadata().await.unwrap();
 
             assert_eq!(metadata.segment_count, 10);
             for i in 0..5 {
-                let loc = &metadata.bloom_filter_locs[metadata.segment_loc_indices[i] as usize];
-                let bf = bloom_filter.bloom_filter(loc).await.unwrap();
+                let loc = &metadata.cuckoo_filter_locs[metadata.segment_loc_indices[i] as usize];
+                let bf = cuckoo_filter.cuckoo_filter(loc).await.unwrap();
                 assert!(bf.contains(b"tag1"));
             }
             for i in 5..10 {
-                let loc = &metadata.bloom_filter_locs[metadata.segment_loc_indices[i] as usize];
-                let bf = bloom_filter.bloom_filter(loc).await.unwrap();
+                let loc = &metadata.cuckoo_filter_locs[metadata.segment_loc_indices[i] as usize];
+                let bf = cuckoo_filter.cuckoo_filter(loc).await.unwrap();
                 assert!(bf.contains(b"tag2"));
             }
         }
@@ -540,18 +540,18 @@ pub(crate) mod tests {
             let sort_field = SortField::new(ConcreteDataType::uint64_datatype());
 
             let blob_guard = puffin_reader
-                .blob("greptime-bloom-filter-v1-3")
+                .blob("greptime-cuckoo-filter-v1-3")
                 .await
                 .unwrap();
             let reader = blob_guard.reader().await.unwrap();
-            let bloom_filter = BloomFilterReaderImpl::new(reader);
-            let metadata = bloom_filter.metadata().await.unwrap();
+            let cuckoo_filter = CuckooFilterReaderImpl::new(reader);
+            let metadata = cuckoo_filter.metadata().await.unwrap();
 
             assert_eq!(metadata.segment_count, 5);
             for i in 0u64..20 {
                 let idx = i as usize / 4;
-                let loc = &metadata.bloom_filter_locs[metadata.segment_loc_indices[idx] as usize];
-                let bf = bloom_filter.bloom_filter(loc).await.unwrap();
+                let loc = &metadata.cuckoo_filter_locs[metadata.segment_loc_indices[idx] as usize];
+                let bf = cuckoo_filter.cuckoo_filter(loc).await.unwrap();
                 let mut buf = vec![];
                 IndexValueCodec::encode_nonnull_value(ValueRef::UInt64(i), &sort_field, &mut buf)
                     .unwrap();

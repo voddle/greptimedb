@@ -20,8 +20,8 @@ use std::sync::Arc;
 
 use common_base::range_read::RangeReader;
 use common_telemetry::warn;
-use index::bloom_filter::applier::{BloomFilterApplier, InListPredicate};
-use index::bloom_filter::reader::{BloomFilterReader, BloomFilterReaderImpl};
+use index::cuckoo_filter::applier::{CuckooFilterApplier, InListPredicate};
+use index::cuckoo_filter::reader::{CuckooFilterReader, CuckooFilterReaderImpl};
 use object_store::ObjectStore;
 use puffin::puffin_manager::cache::PuffinMetadataCacheRef;
 use puffin::puffin_manager::{PuffinManager, PuffinReader};
@@ -30,24 +30,24 @@ use store_api::storage::{ColumnId, RegionId};
 
 use crate::access_layer::{RegionFilePathFactory, WriteCachePathProvider};
 use crate::cache::file_cache::{FileCacheRef, FileType, IndexKey};
-use crate::cache::index::bloom_filter_index::{
-    BloomFilterIndexCacheRef, CachedBloomFilterIndexBlobReader,
+use crate::cache::index::cuckoo_filter_index::{
+    CuckooFilterIndexCacheRef, CachedCuckooFilterIndexBlobReader,
 };
 use crate::error::{
-    ApplyBloomFilterIndexSnafu, Error, MetadataSnafu, PuffinBuildReaderSnafu, PuffinReadBlobSnafu,
+    ApplyCuckooFilterIndexSnafu, Error, MetadataSnafu, PuffinBuildReaderSnafu, PuffinReadBlobSnafu,
     Result,
 };
 use crate::metrics::INDEX_APPLY_ELAPSED;
 use crate::sst::file::FileId;
-pub use crate::sst::index::bloom_filter::applier::builder::BloomFilterIndexApplierBuilder;
-use crate::sst::index::bloom_filter::INDEX_BLOB_TYPE;
+pub use crate::sst::index::cuckoo_filter::applier::builder::CuckooFilterIndexApplierBuilder;
+use crate::sst::index::cuckoo_filter::INDEX_BLOB_TYPE;
 use crate::sst::index::puffin_manager::{BlobReader, PuffinManagerFactory};
-use crate::sst::index::TYPE_BLOOM_FILTER_INDEX;
+use crate::sst::index::TYPE_CUCKOO_FILTER_INDEX;
 
-pub(crate) type BloomFilterIndexApplierRef = Arc<BloomFilterIndexApplier>;
+pub(crate) type CuckooFilterIndexApplierRef = Arc<CuckooFilterIndexApplier>;
 
-/// `BloomFilterIndexApplier` applies bloom filter predicates to the SST file.
-pub struct BloomFilterIndexApplier {
+/// `CuckooFilterIndexApplier` applies cuckoo filter predicates to the SST file.
+pub struct CuckooFilterIndexApplier {
     /// Directory of the region.
     region_dir: String,
 
@@ -66,16 +66,16 @@ pub struct BloomFilterIndexApplier {
     /// Cache for puffin metadata.
     puffin_metadata_cache: Option<PuffinMetadataCacheRef>,
 
-    /// Cache for bloom filter index.
-    bloom_filter_index_cache: Option<BloomFilterIndexCacheRef>,
+    /// Cache for cuckoo filter index.
+    cuckoo_filter_index_cache: Option<CuckooFilterIndexCacheRef>,
 
-    /// Bloom filter predicates.
+    /// Cuckoo filter predicates.
     /// For each column, the value will be retained only if it contains __all__ predicates.
     predicates: HashMap<ColumnId, Vec<InListPredicate>>,
 }
 
-impl BloomFilterIndexApplier {
-    /// Creates a new `BloomFilterIndexApplier`.
+impl CuckooFilterIndexApplier {
+    /// Creates a new `CuckooFilterIndexApplier`.
     ///
     /// For each column, the value will be retained only if it contains __all__ predicates.
     pub fn new(
@@ -92,7 +92,7 @@ impl BloomFilterIndexApplier {
             file_cache: None,
             puffin_manager_factory,
             puffin_metadata_cache: None,
-            bloom_filter_index_cache: None,
+            cuckoo_filter_index_cache: None,
             predicates,
         }
     }
@@ -110,15 +110,15 @@ impl BloomFilterIndexApplier {
         self
     }
 
-    pub fn with_bloom_filter_cache(
+    pub fn with_cuckoo_filter_cache(
         mut self,
-        bloom_filter_index_cache: Option<BloomFilterIndexCacheRef>,
+        cuckoo_filter_index_cache: Option<CuckooFilterIndexCacheRef>,
     ) -> Self {
-        self.bloom_filter_index_cache = bloom_filter_index_cache;
+        self.cuckoo_filter_index_cache = cuckoo_filter_index_cache;
         self
     }
 
-    /// Applies bloom filter predicates to the provided SST file and returns a
+    /// Applies cuckoo filter predicates to the provided SST file and returns a
     /// list of row group ranges that match the predicates.
     ///
     /// The `row_groups` iterator provides the row group lengths and whether to search in the row group.
@@ -129,7 +129,7 @@ impl BloomFilterIndexApplier {
         row_groups: impl Iterator<Item = (usize, bool)>,
     ) -> Result<Vec<(usize, Vec<Range<usize>>)>> {
         let _timer = INDEX_APPLY_ELAPSED
-            .with_label_values(&[TYPE_BLOOM_FILTER_INDEX])
+            .with_label_values(&[TYPE_CUCKOO_FILTER_INDEX])
             .start_timer();
 
         // Calculates row groups' ranges based on start of the file.
@@ -160,23 +160,23 @@ impl BloomFilterIndexApplier {
             };
 
             // Create appropriate reader based on whether we have caching enabled
-            if let Some(bloom_filter_cache) = &self.bloom_filter_index_cache {
+            if let Some(cuckoo_filter_cache) = &self.cuckoo_filter_index_cache {
                 let blob_size = blob.metadata().await.context(MetadataSnafu)?.content_length;
-                let reader = CachedBloomFilterIndexBlobReader::new(
+                let reader = CachedCuckooFilterIndexBlobReader::new(
                     file_id,
                     *column_id,
                     blob_size,
-                    BloomFilterReaderImpl::new(blob),
-                    bloom_filter_cache.clone(),
+                    CuckooFilterReaderImpl::new(blob),
+                    cuckoo_filter_cache.clone(),
                 );
                 self.apply_predicates(reader, predicates, &mut output)
                     .await
-                    .context(ApplyBloomFilterIndexSnafu)?;
+                    .context(ApplyCuckooFilterIndexSnafu)?;
             } else {
-                let reader = BloomFilterReaderImpl::new(blob);
+                let reader = CuckooFilterReaderImpl::new(blob);
                 self.apply_predicates(reader, predicates, &mut output)
                     .await
-                    .context(ApplyBloomFilterIndexSnafu)?;
+                    .context(ApplyCuckooFilterIndexSnafu)?;
             }
         }
 
@@ -300,13 +300,13 @@ impl BloomFilterIndexApplier {
             .context(PuffinBuildReaderSnafu)
     }
 
-    async fn apply_predicates<R: BloomFilterReader + Send + 'static>(
+    async fn apply_predicates<R: CuckooFilterReader + Send + 'static>(
         &self,
         reader: R,
         predicates: &[InListPredicate],
         output: &mut [(usize, Vec<Range<usize>>)],
-    ) -> std::result::Result<(), index::bloom_filter::error::Error> {
-        let mut applier = BloomFilterApplier::new(Box::new(reader)).await?;
+    ) -> std::result::Result<(), index::cuckoo_filter::error::Error> {
+        let mut applier = CuckooFilterApplier::new(Box::new(reader)).await?;
 
         for (_, output) in output.iter_mut() {
             // All rows are filtered out, skip the search
@@ -340,10 +340,10 @@ mod tests {
     use store_api::metadata::RegionMetadata;
 
     use super::*;
-    use crate::sst::index::bloom_filter::creator::tests::{
+    use crate::sst::index::cuckoo_filter::creator::tests::{
         mock_object_store, mock_region_metadata, new_batch, new_intm_mgr,
     };
-    use crate::sst::index::bloom_filter::creator::BloomFilterIndexer;
+    use crate::sst::index::cuckoo_filter::creator::CuckooFilterIndexer;
 
     #[allow(clippy::type_complexity)]
     fn tester(
@@ -362,7 +362,7 @@ mod tests {
             let exprs = exprs.to_vec();
 
             Box::pin(async move {
-                let builder = BloomFilterIndexApplierBuilder::new(
+                let builder = CuckooFilterIndexApplierBuilder::new(
                     region_dir,
                     object_store,
                     &metadata,
@@ -380,10 +380,10 @@ mod tests {
 
     #[tokio::test]
     #[allow(clippy::single_range_in_vec_init)]
-    async fn test_bloom_filter_applier() {
+    async fn test_cuckoo_filter_applier() {
         // tag_str:
         //   - type: string
-        //   - index: bloom filter
+        //   - index: cuckoo filter
         //   - granularity: 2
         //   - column_id: 1
         //
@@ -394,11 +394,11 @@ mod tests {
         //
         // field_u64:
         //   - type: uint64
-        //   - index: bloom filter
+        //   - index: cuckoo filter
         //   - granularity: 4
         //   - column_id: 3
         let region_metadata = mock_region_metadata();
-        let prefix = "test_bloom_filter_applier_";
+        let prefix = "test_cuckoo_filter_applier_";
         let (d, factory) = PuffinManagerFactory::new_for_test_async(prefix).await;
         let object_store = mock_object_store();
         let intm_mgr = new_intm_mgr(d.path().to_string_lossy()).await;
@@ -407,7 +407,7 @@ mod tests {
         let region_dir = "region_dir".to_string();
 
         let mut indexer =
-            BloomFilterIndexer::new(file_id, &region_metadata, intm_mgr, memory_usage_threshold)
+            CuckooFilterIndexer::new(file_id, &region_metadata, intm_mgr, memory_usage_threshold)
                 .unwrap()
                 .unwrap();
 

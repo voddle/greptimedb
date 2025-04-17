@@ -127,7 +127,7 @@ impl WriteCache {
             index_options: write_request.index_options,
             inverted_index_config: write_request.inverted_index_config,
             fulltext_index_config: write_request.fulltext_index_config,
-            bloom_filter_index_config: write_request.bloom_filter_index_config,
+            cuckoo_filter_index_config: write_request.cuckoo_filter_index_config,
         };
 
         // Write to FileCache.
@@ -455,7 +455,7 @@ mod tests {
             index_options: IndexOptions::default(),
             inverted_index_config: Default::default(),
             fulltext_index_config: Default::default(),
-            bloom_filter_index_config: Default::default(),
+            cuckoo_filter_index_config: Default::default(),
         };
 
         let upload_request = SstUploadRequest {
@@ -551,7 +551,7 @@ mod tests {
             index_options: IndexOptions::default(),
             inverted_index_config: Default::default(),
             fulltext_index_config: Default::default(),
-            bloom_filter_index_config: Default::default(),
+            cuckoo_filter_index_config: Default::default(),
         };
         let write_opts = WriteOptions {
             row_group_size: 512,

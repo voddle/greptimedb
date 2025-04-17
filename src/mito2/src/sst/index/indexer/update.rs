@@ -29,7 +29,7 @@ impl Indexer {
         if !self.do_update_fulltext_index(batch).await {
             self.do_abort().await;
         }
-        if !self.do_update_bloom_filter(batch).await {
+        if !self.do_update_cuckoo_filter(batch).await {
             self.do_abort().await;
         }
     }
@@ -85,8 +85,8 @@ impl Indexer {
     }
 
     /// Returns false if the update failed.
-    async fn do_update_bloom_filter(&mut self, batch: &mut Batch) -> bool {
-        let Some(creator) = self.bloom_filter_indexer.as_mut() else {
+    async fn do_update_cuckoo_filter(&mut self, batch: &mut Batch) -> bool {
+        let Some(creator) = self.cuckoo_filter_indexer.as_mut() else {
             return true;
         };
 
@@ -96,12 +96,12 @@ impl Indexer {
 
         if cfg!(any(test, feature = "test")) {
             panic!(
-                "Failed to update bloom filter, region_id: {}, file_id: {}, err: {:?}",
+                "Failed to update cuckoo filter, region_id: {}, file_id: {}, err: {:?}",
                 self.region_id, self.file_id, err
             );
         } else {
             warn!(
-                err; "Failed to update bloom filter, region_id: {}, file_id: {}",
+                err; "Failed to update cuckoo filter, region_id: {}, file_id: {}",
                 self.region_id, self.file_id,
             );
         }

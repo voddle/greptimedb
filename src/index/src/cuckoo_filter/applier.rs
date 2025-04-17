@@ -16,12 +16,13 @@ use std::collections::HashSet;
 use std::ops::Range;
 
 use cuckoofilter::CuckooFilter;
-use greptime_proto::v1::index::BloomFilterMeta;
+use greptime_proto::v1::index::CuckooFilterMeta;
+// use greptime_proto::v1::index::BloomFilterMeta;
 use std::collections::hash_map::DefaultHasher;
 use itertools::Itertools;
 
-use crate::bloom_filter::error::Result;
-use crate::bloom_filter::reader::BloomFilterReader;
+use crate::cuckoo_filter::error::Result;
+use crate::cuckoo_filter::reader::CuckooFilterReader;
 use crate::Bytes;
 
 /// `InListPredicate` contains a list of acceptable values. A value needs to match at least
@@ -32,13 +33,13 @@ pub struct InListPredicate {
     pub list: HashSet<Bytes>,
 }
 
-pub struct BloomFilterApplier {
-    reader: Box<dyn BloomFilterReader + Send>,
-    meta: BloomFilterMeta,
+pub struct CuckooFilterApplier {
+    reader: Box<dyn CuckooFilterReader + Send>,
+    meta: CuckooFilterMeta,
 }
 
-impl BloomFilterApplier {
-    pub async fn new(reader: Box<dyn BloomFilterReader + Send>) -> Result<Self> {
+impl CuckooFilterApplier {
+    pub async fn new(reader: Box<dyn CuckooFilterReader + Send>) -> Result<Self> {
         let meta = reader.metadata().await?;
 
         Ok(Self { reader, meta })
@@ -58,8 +59,8 @@ impl BloomFilterApplier {
         }
 
         let segments = self.row_ranges_to_segments(search_ranges);
-        let (seg_locations, bloom_filters) = self.load_bloom_filters(&segments).await?;
-        let matching_row_ranges = self.find_matching_rows(seg_locations, bloom_filters, predicates);
+        let (seg_locations, cuckoo_filters) = self.load_cuckoo_filters(&segments).await?;
+        let matching_row_ranges = self.find_matching_rows(seg_locations, cuckoo_filters, predicates);
         Ok(intersect_ranges(search_ranges, &matching_row_ranges))
     }
 
@@ -92,8 +93,8 @@ impl BloomFilterApplier {
         segments
     }
 
-    /// Loads bloom filters for the given segments and returns the segment locations and bloom filters
-    async fn load_bloom_filters(
+    /// Loads cuckoo filters for the given segments and returns the segment locations and cuckoo filters
+    async fn load_cuckoo_filters(
         &mut self,
         segments: &[usize],
     ) -> Result<(Vec<(u64, usize)>, Vec<CuckooFilter<DefaultHasher>>)> {
@@ -102,42 +103,42 @@ impl BloomFilterApplier {
             .map(|&seg| (self.meta.segment_loc_indices[seg], seg))
             .collect::<Vec<_>>();
 
-        let bloom_filter_locs = segment_locations
+        let cuckoo_filter_locs = segment_locations
             .iter()
             .map(|(loc, _)| *loc)
             .dedup()
-            .map(|i| self.meta.bloom_filter_locs[i as usize])
+            .map(|i| self.meta.cuckoo_filter_locs[i as usize])
             .collect::<Vec<_>>();
 
-        let bloom_filters = self.reader.bloom_filter_vec(&bloom_filter_locs).await?;
+        let cuckoo_filters = self.reader.cuckoo_filter_vec(&cuckoo_filter_locs).await?;
 
-        Ok((segment_locations, bloom_filters))
+        Ok((segment_locations, cuckoo_filters))
     }
 
     /// Finds segments that match all predicates and converts them to row ranges
     fn find_matching_rows(
         &self,
         segment_locations: Vec<(u64, usize)>,
-        bloom_filters: Vec<CuckooFilter<DefaultHasher>>,
+        cuckoo_filters: Vec<CuckooFilter<DefaultHasher>>,
         predicates: &[InListPredicate],
     ) -> Vec<Range<usize>> {
         let rows_per_segment = self.meta.rows_per_segment as usize;
-        let mut matching_row_ranges = Vec::with_capacity(bloom_filters.len());
+        let mut matching_row_ranges = Vec::with_capacity(cuckoo_filters.len());
 
-        // Group segments by their location index (since they have the same bloom filter) and check if they match all predicates
-        for ((_loc_index, group), bloom_filter) in segment_locations
+        // Group segments by their location index (since they have the same cuckoo filter) and check if they match all predicates
+        for ((_loc_index, group), cuckoo_filter) in segment_locations
             .into_iter()
             .chunk_by(|(loc, _)| *loc)
             .into_iter()
-            .zip(bloom_filters.iter())
+            .zip(cuckoo_filters.iter())
         {
-            // Check if this bloom filter matches each predicate (AND semantics)
+            // Check if this cuckoo filter matches each predicate (AND semantics)
             let matches_all_predicates = predicates.iter().all(|predicate| {
                 // For each predicate, at least one probe must match (OR semantics)
                 predicate
                     .list
                     .iter()
-                    .any(|probe| bloom_filter.contains(probe))
+                    .any(|probe| cuckoo_filter.contains(probe))
             });
 
             if !matches_all_predicates {
@@ -209,15 +210,15 @@ mod tests {
     use futures::io::Cursor;
 
     use super::*;
-    use crate::bloom_filter::creator::BloomFilterCreator;
-    use crate::bloom_filter::reader::BloomFilterReaderImpl;
+    use crate::cuckoo_filter::creator::CuckooFilterCreator;
+    use crate::cuckoo_filter::reader::CuckooFilterReaderImpl;
     use crate::external_provider::MockExternalTempFileProvider;
 
     #[tokio::test]
     #[allow(clippy::single_range_in_vec_init)]
     async fn test_appliter() {
         let mut writer = Cursor::new(Vec::new());
-        let mut creator = BloomFilterCreator::new(
+        let mut creator = CuckooFilterCreator::new(
             4,
             Arc::new(MockExternalTempFileProvider::new()),
             Arc::new(AtomicUsize::new(0)),
@@ -270,8 +271,8 @@ mod tests {
         creator.finish(&mut writer).await.unwrap();
 
         let bytes = writer.into_inner();
-        let reader = BloomFilterReaderImpl::new(bytes);
-        let mut applier = BloomFilterApplier::new(Box::new(reader)).await.unwrap();
+        let reader = CuckooFilterReaderImpl::new(bytes);
+        let mut applier = CuckooFilterApplier::new(Box::new(reader)).await.unwrap();
 
         // Test cases for predicates
         let cases = vec![

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub(crate) mod bloom_filter;
+pub(crate) mod cuckoo_filter;
 mod codec;
 pub(crate) mod fulltext_index;
 mod indexer;
@@ -24,7 +24,7 @@ pub(crate) mod store;
 
 use std::num::NonZeroUsize;
 
-use bloom_filter::creator::BloomFilterIndexer;
+use cuckoo_filter::creator::CuckooFilterIndexer;
 use common_telemetry::{debug, warn};
 use puffin_manager::SstPuffinManager;
 use smallvec::SmallVec;
@@ -33,7 +33,7 @@ use store_api::metadata::RegionMetadataRef;
 use store_api::storage::{ColumnId, RegionId};
 
 use crate::access_layer::OperationType;
-use crate::config::{BloomFilterConfig, FulltextIndexConfig, InvertedIndexConfig};
+use crate::config::{CuckooFilterConfig, FulltextIndexConfig, InvertedIndexConfig};
 use crate::metrics::INDEX_CREATE_MEMORY_USAGE;
 use crate::read::Batch;
 use crate::region::options::IndexOptions;
@@ -44,9 +44,9 @@ use crate::sst::index::inverted_index::creator::InvertedIndexer;
 
 pub(crate) const TYPE_INVERTED_INDEX: &str = "inverted_index";
 pub(crate) const TYPE_FULLTEXT_INDEX: &str = "fulltext_index";
-pub(crate) const TYPE_BLOOM_FILTER_INDEX: &str = "bloom_filter_index";
+pub(crate) const TYPE_CUCKOO_FILTER_INDEX: &str = "cuckoo_filter_index";
 
-const DEFAULT_FULLTEXT_BLOOM_ROW_GRANULARITY: usize = 8096;
+const DEFAULT_FULLTEXT_CUCKOO_ROW_GRANULARITY: usize = 8096;
 
 /// Output of the index creation.
 #[derive(Debug, Clone, Default)]
@@ -57,8 +57,8 @@ pub struct IndexOutput {
     pub inverted_index: InvertedIndexOutput,
     /// Fulltext index output.
     pub fulltext_index: FulltextIndexOutput,
-    /// Bloom filter output.
-    pub bloom_filter: BloomFilterOutput,
+    /// Cuckoo filter output.
+    pub cuckoo_filter: CuckooFilterOutput,
 }
 
 impl IndexOutput {
@@ -70,8 +70,8 @@ impl IndexOutput {
         if self.fulltext_index.is_available() {
             indexes.push(IndexType::FulltextIndex);
         }
-        if self.bloom_filter.is_available() {
-            indexes.push(IndexType::BloomFilterIndex);
+        if self.cuckoo_filter.is_available() {
+            indexes.push(IndexType::CuckooFilterIndex);
         }
         indexes
     }
@@ -98,8 +98,8 @@ impl IndexBaseOutput {
 pub type InvertedIndexOutput = IndexBaseOutput;
 /// Output of the fulltext index creation.
 pub type FulltextIndexOutput = IndexBaseOutput;
-/// Output of the bloom filter creation.
-pub type BloomFilterOutput = IndexBaseOutput;
+/// Output of the cuckoo filter creation.
+pub type CuckooFilterOutput = IndexBaseOutput;
 
 /// The index creator that hides the error handling details.
 #[derive(Default)]
@@ -111,8 +111,8 @@ pub struct Indexer {
     last_mem_inverted_index: usize,
     fulltext_indexer: Option<FulltextIndexer>,
     last_mem_fulltext_index: usize,
-    bloom_filter_indexer: Option<BloomFilterIndexer>,
-    last_mem_bloom_filter: usize,
+    cuckoo_filter_indexer: Option<CuckooFilterIndexer>,
+    last_mem_cuckoo_filter: usize,
 }
 
 impl Indexer {
@@ -157,14 +157,14 @@ impl Indexer {
             .add(fulltext_mem as i64 - self.last_mem_fulltext_index as i64);
         self.last_mem_fulltext_index = fulltext_mem;
 
-        let bloom_filter_mem = self
-            .bloom_filter_indexer
+        let cuckoo_filter_mem = self
+            .cuckoo_filter_indexer
             .as_ref()
             .map_or(0, |creator| creator.memory_usage());
         INDEX_CREATE_MEMORY_USAGE
-            .with_label_values(&[TYPE_BLOOM_FILTER_INDEX])
-            .add(bloom_filter_mem as i64 - self.last_mem_bloom_filter as i64);
-        self.last_mem_bloom_filter = bloom_filter_mem;
+            .with_label_values(&[TYPE_CUCKOO_FILTER_INDEX])
+            .add(cuckoo_filter_mem as i64 - self.last_mem_cuckoo_filter as i64);
+        self.last_mem_cuckoo_filter = cuckoo_filter_mem;
     }
 }
 
@@ -183,7 +183,7 @@ pub(crate) struct IndexerBuilderImpl {
     pub(crate) index_options: IndexOptions,
     pub(crate) inverted_index_config: InvertedIndexConfig,
     pub(crate) fulltext_index_config: FulltextIndexConfig,
-    pub(crate) bloom_filter_index_config: BloomFilterConfig,
+    pub(crate) cuckoo_filter_index_config: CuckooFilterConfig,
 }
 
 #[async_trait::async_trait]
@@ -198,10 +198,10 @@ impl IndexerBuilder for IndexerBuilderImpl {
 
         indexer.inverted_indexer = self.build_inverted_indexer(file_id);
         indexer.fulltext_indexer = self.build_fulltext_indexer(file_id).await;
-        indexer.bloom_filter_indexer = self.build_bloom_filter_indexer(file_id);
+        indexer.cuckoo_filter_indexer = self.build_cuckoo_filter_indexer(file_id);
         if indexer.inverted_indexer.is_none()
             && indexer.fulltext_indexer.is_none()
-            && indexer.bloom_filter_indexer.is_none()
+            && indexer.cuckoo_filter_indexer.is_none()
         {
             indexer.abort().await;
             return Indexer::default();
@@ -294,7 +294,7 @@ impl IndexerBuilderImpl {
             &self.intermediate_manager,
             &self.metadata,
             self.fulltext_index_config.compress,
-            DEFAULT_FULLTEXT_BLOOM_ROW_GRANULARITY,
+            DEFAULT_FULLTEXT_CUCKOO_ROW_GRANULARITY,
             mem_limit,
         )
         .await;
@@ -327,22 +327,22 @@ impl IndexerBuilderImpl {
         None
     }
 
-    fn build_bloom_filter_indexer(&self, file_id: FileId) -> Option<BloomFilterIndexer> {
+    fn build_cuckoo_filter_indexer(&self, file_id: FileId) -> Option<CuckooFilterIndexer> {
         let create = match self.op_type {
-            OperationType::Flush => self.bloom_filter_index_config.create_on_flush.auto(),
-            OperationType::Compact => self.bloom_filter_index_config.create_on_compaction.auto(),
+            OperationType::Flush => self.cuckoo_filter_index_config.create_on_flush.auto(),
+            OperationType::Compact => self.cuckoo_filter_index_config.create_on_compaction.auto(),
         };
 
         if !create {
             debug!(
-                "Skip creating bloom filter due to config, region_id: {}, file_id: {}",
+                "Skip creating cuckoo filter due to config, region_id: {}, file_id: {}",
                 self.metadata.region_id, file_id,
             );
             return None;
         }
 
-        let mem_limit = self.bloom_filter_index_config.mem_threshold_on_create();
-        let indexer = BloomFilterIndexer::new(
+        let mem_limit = self.cuckoo_filter_index_config.mem_threshold_on_create();
+        let indexer = CuckooFilterIndexer::new(
             file_id,
             &self.metadata,
             self.intermediate_manager.clone(),
@@ -353,7 +353,7 @@ impl IndexerBuilderImpl {
             Ok(indexer) => {
                 if indexer.is_none() {
                     debug!(
-                        "Skip creating bloom filter due to no columns require indexing, region_id: {}, file_id: {}",
+                        "Skip creating cuckoo filter due to no columns require indexing, region_id: {}, file_id: {}",
                         self.metadata.region_id, file_id,
                     );
                 }
@@ -364,12 +364,12 @@ impl IndexerBuilderImpl {
 
         if cfg!(any(test, feature = "test")) {
             panic!(
-                "Failed to create bloom filter, region_id: {}, file_id: {}, err: {:?}",
+                "Failed to create cuckoo filter, region_id: {}, file_id: {}, err: {:?}",
                 self.metadata.region_id, file_id, err
             );
         } else {
             warn!(
-                err; "Failed to create bloom filter, region_id: {}, file_id: {}",
+                err; "Failed to create cuckoo filter, region_id: {}, file_id: {}",
                 self.metadata.region_id, file_id,
             );
         }
@@ -399,14 +399,14 @@ mod tests {
     struct MetaConfig {
         with_inverted: bool,
         with_fulltext: bool,
-        with_skipping_bloom: bool,
+        with_skipping_cuckoo: bool,
     }
 
     fn mock_region_metadata(
         MetaConfig {
             with_inverted,
             with_fulltext,
-            with_skipping_bloom,
+            with_skipping_cuckoo,
         }: MetaConfig,
     ) -> RegionMetadataRef {
         let mut builder = RegionMetadataBuilder::new(RegionId::new(1, 2));
@@ -453,12 +453,12 @@ mod tests {
             builder.push_column_metadata(column);
         }
 
-        if with_skipping_bloom {
+        if with_skipping_cuckoo {
             let column_schema =
-                ColumnSchema::new("bloom", ConcreteDataType::string_datatype(), false)
+                ColumnSchema::new("cuckoo", ConcreteDataType::string_datatype(), false)
                     .with_skipping_options(SkippingIndexOptions {
                         granularity: 42,
-                        index_type: SkippingIndexType::BloomFilter,
+                        index_type: SkippingIndexType::CuckooFilter,
                     })
                     .unwrap();
 
@@ -503,7 +503,7 @@ mod tests {
         let metadata = mock_region_metadata(MetaConfig {
             with_inverted: true,
             with_fulltext: true,
-            with_skipping_bloom: true,
+            with_skipping_cuckoo: true,
         });
         let indexer = IndexerBuilderImpl {
             op_type: OperationType::Flush,
@@ -514,14 +514,14 @@ mod tests {
             index_options: IndexOptions::default(),
             inverted_index_config: InvertedIndexConfig::default(),
             fulltext_index_config: FulltextIndexConfig::default(),
-            bloom_filter_index_config: BloomFilterConfig::default(),
+            cuckoo_filter_index_config: CuckooFilterConfig::default(),
         }
         .build(FileId::random())
         .await;
 
         assert!(indexer.inverted_indexer.is_some());
         assert!(indexer.fulltext_indexer.is_some());
-        assert!(indexer.bloom_filter_indexer.is_some());
+        assert!(indexer.cuckoo_filter_indexer.is_some());
     }
 
     #[tokio::test]
@@ -533,7 +533,7 @@ mod tests {
         let metadata = mock_region_metadata(MetaConfig {
             with_inverted: true,
             with_fulltext: true,
-            with_skipping_bloom: true,
+            with_skipping_cuckoo: true,
         });
         let indexer = IndexerBuilderImpl {
             op_type: OperationType::Flush,
@@ -547,14 +547,14 @@ mod tests {
                 ..Default::default()
             },
             fulltext_index_config: FulltextIndexConfig::default(),
-            bloom_filter_index_config: BloomFilterConfig::default(),
+            cuckoo_filter_index_config: CuckooFilterConfig::default(),
         }
         .build(FileId::random())
         .await;
 
         assert!(indexer.inverted_indexer.is_none());
         assert!(indexer.fulltext_indexer.is_some());
-        assert!(indexer.bloom_filter_indexer.is_some());
+        assert!(indexer.cuckoo_filter_indexer.is_some());
 
         let indexer = IndexerBuilderImpl {
             op_type: OperationType::Compact,
@@ -568,14 +568,14 @@ mod tests {
                 create_on_compaction: Mode::Disable,
                 ..Default::default()
             },
-            bloom_filter_index_config: BloomFilterConfig::default(),
+            cuckoo_filter_index_config: CuckooFilterConfig::default(),
         }
         .build(FileId::random())
         .await;
 
         assert!(indexer.inverted_indexer.is_some());
         assert!(indexer.fulltext_indexer.is_none());
-        assert!(indexer.bloom_filter_indexer.is_some());
+        assert!(indexer.cuckoo_filter_indexer.is_some());
 
         let indexer = IndexerBuilderImpl {
             op_type: OperationType::Compact,
@@ -586,7 +586,7 @@ mod tests {
             index_options: IndexOptions::default(),
             inverted_index_config: InvertedIndexConfig::default(),
             fulltext_index_config: FulltextIndexConfig::default(),
-            bloom_filter_index_config: BloomFilterConfig {
+            cuckoo_filter_index_config: CuckooFilterConfig {
                 create_on_compaction: Mode::Disable,
                 ..Default::default()
             },
@@ -596,7 +596,7 @@ mod tests {
 
         assert!(indexer.inverted_indexer.is_some());
         assert!(indexer.fulltext_indexer.is_some());
-        assert!(indexer.bloom_filter_indexer.is_none());
+        assert!(indexer.cuckoo_filter_indexer.is_none());
     }
 
     #[tokio::test]
@@ -608,7 +608,7 @@ mod tests {
         let metadata = mock_region_metadata(MetaConfig {
             with_inverted: false,
             with_fulltext: true,
-            with_skipping_bloom: true,
+            with_skipping_cuckoo: true,
         });
         let indexer = IndexerBuilderImpl {
             op_type: OperationType::Flush,
@@ -619,19 +619,19 @@ mod tests {
             index_options: IndexOptions::default(),
             inverted_index_config: InvertedIndexConfig::default(),
             fulltext_index_config: FulltextIndexConfig::default(),
-            bloom_filter_index_config: BloomFilterConfig::default(),
+            cuckoo_filter_index_config: CuckooFilterConfig::default(),
         }
         .build(FileId::random())
         .await;
 
         assert!(indexer.inverted_indexer.is_none());
         assert!(indexer.fulltext_indexer.is_some());
-        assert!(indexer.bloom_filter_indexer.is_some());
+        assert!(indexer.cuckoo_filter_indexer.is_some());
 
         let metadata = mock_region_metadata(MetaConfig {
             with_inverted: true,
             with_fulltext: false,
-            with_skipping_bloom: true,
+            with_skipping_cuckoo: true,
         });
         let indexer = IndexerBuilderImpl {
             op_type: OperationType::Flush,
@@ -642,19 +642,19 @@ mod tests {
             index_options: IndexOptions::default(),
             inverted_index_config: InvertedIndexConfig::default(),
             fulltext_index_config: FulltextIndexConfig::default(),
-            bloom_filter_index_config: BloomFilterConfig::default(),
+            cuckoo_filter_index_config: CuckooFilterConfig::default(),
         }
         .build(FileId::random())
         .await;
 
         assert!(indexer.inverted_indexer.is_some());
         assert!(indexer.fulltext_indexer.is_none());
-        assert!(indexer.bloom_filter_indexer.is_some());
+        assert!(indexer.cuckoo_filter_indexer.is_some());
 
         let metadata = mock_region_metadata(MetaConfig {
             with_inverted: true,
             with_fulltext: true,
-            with_skipping_bloom: false,
+            with_skipping_cuckoo: false,
         });
         let indexer = IndexerBuilderImpl {
             op_type: OperationType::Flush,
@@ -665,14 +665,14 @@ mod tests {
             index_options: IndexOptions::default(),
             inverted_index_config: InvertedIndexConfig::default(),
             fulltext_index_config: FulltextIndexConfig::default(),
-            bloom_filter_index_config: BloomFilterConfig::default(),
+            cuckoo_filter_index_config: CuckooFilterConfig::default(),
         }
         .build(FileId::random())
         .await;
 
         assert!(indexer.inverted_indexer.is_some());
         assert!(indexer.fulltext_indexer.is_some());
-        assert!(indexer.bloom_filter_indexer.is_none());
+        assert!(indexer.cuckoo_filter_indexer.is_none());
     }
 
     #[tokio::test]
@@ -684,7 +684,7 @@ mod tests {
         let metadata = mock_region_metadata(MetaConfig {
             with_inverted: true,
             with_fulltext: true,
-            with_skipping_bloom: true,
+            with_skipping_cuckoo: true,
         });
         let indexer = IndexerBuilderImpl {
             op_type: OperationType::Flush,
@@ -695,7 +695,7 @@ mod tests {
             index_options: IndexOptions::default(),
             inverted_index_config: InvertedIndexConfig::default(),
             fulltext_index_config: FulltextIndexConfig::default(),
-            bloom_filter_index_config: BloomFilterConfig::default(),
+            cuckoo_filter_index_config: CuckooFilterConfig::default(),
         }
         .build(FileId::random())
         .await;

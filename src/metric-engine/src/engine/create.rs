@@ -478,7 +478,7 @@ impl MetricEngineInner {
     ///
     /// Return `[table_id_col, tsid_col]`
     fn internal_column_metadata() -> [ColumnMetadata; 2] {
-        // Safety: BloomFilter is a valid skipping index type
+        // Safety: CuckooFilter is a valid skipping index type
         let metric_name_col = ColumnMetadata {
             column_id: ReservedColumnId::table_id(),
             semantic_type: SemanticType::Tag,
@@ -489,7 +489,7 @@ impl MetricEngineInner {
             )
             .with_skipping_options(SkippingIndexOptions {
                 granularity: DEFAULT_TABLE_ID_SKIPPING_INDEX_GRANULARITY,
-                index_type: datatypes::schema::SkippingIndexType::BloomFilter,
+                index_type: datatypes::schema::SkippingIndexType::CuckooFilter,
             })
             .unwrap(),
         };

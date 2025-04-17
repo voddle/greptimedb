@@ -19,25 +19,25 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use common_base::range_read::RangeReader;
 use cuckoofilter::CuckooFilter;
-use greptime_proto::v1::index::{BloomFilterLoc, BloomFilterMeta};
+use greptime_proto::v1::index::{CuckooFilterLoc, CuckooFilterMeta};
 use prost::Message;
 use snafu::{ensure, ResultExt};
 use std::collections::hash_map::DefaultHasher;
 
-use crate::bloom_filter::error::{
+use crate::cuckoo_filter::error::{
     DecodeProtoSnafu, FileSizeTooSmallSnafu, IoSnafu, Result, UnexpectedMetaSizeSnafu,
 };
-use crate::bloom_filter::SEED;
+use crate::cuckoo_filter::SEED;
 
-/// Minimum size of the bloom filter, which is the size of the length of the bloom filter.
+/// Minimum size of the cuckoo filter, which is the size of the length of the cuckoo filter.
 const BLOOM_META_LEN_SIZE: u64 = 4;
 
-/// Default prefetch size of bloom filter meta.
+/// Default prefetch size of cuckoo filter meta.
 pub const DEFAULT_PREFETCH_SIZE: u64 = 8192; // 8KiB
 
-/// `BloomFilterReader` reads the bloom filter from the file.
+/// `CuckooFilterReader` reads the cuckoo filter from the file.
 #[async_trait]
-pub trait BloomFilterReader: Sync {
+pub trait CuckooFilterReader: Sync {
     /// Reads range of bytes from the file.
     async fn range_read(&self, offset: u64, size: u32) -> Result<Bytes>;
 
@@ -52,11 +52,11 @@ pub trait BloomFilterReader: Sync {
         Ok(results)
     }
 
-    /// Reads the meta information of the bloom filter.
-    async fn metadata(&self) -> Result<BloomFilterMeta>;
+    /// Reads the meta information of the cuckoo filter.
+    async fn metadata(&self) -> Result<CuckooFilterMeta>;
 
-    /// Reads a bloom filter with the given location.
-    async fn bloom_filter(&self, loc: &BloomFilterLoc) -> Result<CuckooFilter<DefaultHasher>> {
+    /// Reads a cuckoo filter with the given location.
+    async fn cuckoo_filter(&self, loc: &CuckooFilterLoc) -> Result<CuckooFilter<DefaultHasher>> {
         let bytes = self.range_read(loc.offset, loc.size as _).await?;
         // let vec = bytes
         //     .chunks_exact(std::mem::size_of::<u8>())
@@ -73,7 +73,7 @@ pub trait BloomFilterReader: Sync {
         Ok(bm)
     }
 
-    async fn bloom_filter_vec(&self, locs: &[BloomFilterLoc]) -> Result<Vec<CuckooFilter<DefaultHasher>>> {
+    async fn cuckoo_filter_vec(&self, locs: &[CuckooFilterLoc]) -> Result<Vec<CuckooFilter<DefaultHasher>>> {
         let ranges = locs
             .iter()
             .map(|l| l.offset..l.offset + l.size)
@@ -99,21 +99,21 @@ pub trait BloomFilterReader: Sync {
     }
 }
 
-/// `BloomFilterReaderImpl` reads the bloom filter from the file.
-pub struct BloomFilterReaderImpl<R: RangeReader> {
+/// `CuckooFilterReaderImpl` reads the cuckoo filter from the file.
+pub struct CuckooFilterReaderImpl<R: RangeReader> {
     /// The underlying reader.
     reader: R,
 }
 
-impl<R: RangeReader> BloomFilterReaderImpl<R> {
-    /// Creates a new `BloomFilterReaderImpl` with the given reader.
+impl<R: RangeReader> CuckooFilterReaderImpl<R> {
+    /// Creates a new `CuckooFilterReaderImpl` with the given reader.
     pub fn new(reader: R) -> Self {
         Self { reader }
     }
 }
 
 #[async_trait]
-impl<R: RangeReader> BloomFilterReader for BloomFilterReaderImpl<R> {
+impl<R: RangeReader> CuckooFilterReader for CuckooFilterReaderImpl<R> {
     async fn range_read(&self, offset: u64, size: u32) -> Result<Bytes> {
         self.reader
             .read(offset..offset + size as u64)
@@ -125,24 +125,24 @@ impl<R: RangeReader> BloomFilterReader for BloomFilterReaderImpl<R> {
         self.reader.read_vec(ranges).await.context(IoSnafu)
     }
 
-    async fn metadata(&self) -> Result<BloomFilterMeta> {
+    async fn metadata(&self) -> Result<CuckooFilterMeta> {
         let metadata = self.reader.metadata().await.context(IoSnafu)?;
         let file_size = metadata.content_length;
 
         let mut meta_reader =
-            BloomFilterMetaReader::new(&self.reader, file_size, Some(DEFAULT_PREFETCH_SIZE));
+            CuckooFilterMetaReader::new(&self.reader, file_size, Some(DEFAULT_PREFETCH_SIZE));
         meta_reader.metadata().await
     }
 }
 
-/// `BloomFilterMetaReader` reads the metadata of the bloom filter.
-struct BloomFilterMetaReader<R: RangeReader> {
+/// `CuckooFilterMetaReader` reads the metadata of the cuckoo filter.
+struct CuckooFilterMetaReader<R: RangeReader> {
     reader: R,
     file_size: u64,
     prefetch_size: u64,
 }
 
-impl<R: RangeReader> BloomFilterMetaReader<R> {
+impl<R: RangeReader> CuckooFilterMetaReader<R> {
     pub fn new(reader: R, file_size: u64, prefetch_size: Option<u64>) -> Self {
         Self {
             reader,
@@ -153,11 +153,11 @@ impl<R: RangeReader> BloomFilterMetaReader<R> {
         }
     }
 
-    /// Reads the metadata of the bloom filter.
+    /// Reads the metadata of the cuckoo filter.
     ///
     /// It will first prefetch some bytes from the end of the file,
     /// then parse the metadata from the prefetch bytes.
-    pub async fn metadata(&mut self) -> Result<BloomFilterMeta> {
+    pub async fn metadata(&mut self) -> Result<CuckooFilterMeta> {
         ensure!(
             self.file_size >= BLOOM_META_LEN_SIZE,
             FileSizeTooSmallSnafu {
@@ -182,11 +182,11 @@ impl<R: RangeReader> BloomFilterMetaReader<R> {
                 .read(metadata_start..self.file_size - BLOOM_META_LEN_SIZE)
                 .await
                 .context(IoSnafu)?;
-            BloomFilterMeta::decode(meta).context(DecodeProtoSnafu)
+            CuckooFilterMeta::decode(meta).context(DecodeProtoSnafu)
         } else {
             let metadata_start = self.file_size - length - BLOOM_META_LEN_SIZE - meta_start;
             let meta = &suffix[metadata_start as usize..suffix_len - BLOOM_META_LEN_SIZE as usize];
-            BloomFilterMeta::decode(meta).context(DecodeProtoSnafu)
+            CuckooFilterMeta::decode(meta).context(DecodeProtoSnafu)
         }
     }
 
@@ -225,12 +225,12 @@ mod tests {
     use futures::io::Cursor;
 
     use super::*;
-    use crate::bloom_filter::creator::BloomFilterCreator;
+    use crate::cuckoo_filter::creator::CuckooFilterCreator;
     use crate::external_provider::MockExternalTempFileProvider;
 
-    async fn mock_bloom_filter_bytes() -> Vec<u8> {
+    async fn mock_cuckoo_filter_bytes() -> Vec<u8> {
         let mut writer = Cursor::new(vec![]);
-        let mut creator = BloomFilterCreator::new(
+        let mut creator = CuckooFilterCreator::new(
             2,
             Arc::new(MockExternalTempFileProvider::new()),
             Arc::new(AtomicUsize::new(0)),
@@ -256,40 +256,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_bloom_filter_meta_reader() {
-        let bytes = mock_bloom_filter_bytes().await;
+    async fn test_cuckoo_filter_meta_reader() {
+        let bytes = mock_cuckoo_filter_bytes().await;
         let file_size = bytes.len() as u64;
 
         for prefetch in [0u64, file_size / 2, file_size, file_size + 10] {
             let mut reader =
-                BloomFilterMetaReader::new(bytes.clone(), file_size as _, Some(prefetch));
+                CuckooFilterMetaReader::new(bytes.clone(), file_size as _, Some(prefetch));
             let meta = reader.metadata().await.unwrap();
 
             assert_eq!(meta.rows_per_segment, 2);
             assert_eq!(meta.segment_count, 2);
             assert_eq!(meta.row_count, 3);
-            assert_eq!(meta.bloom_filter_locs.len(), 2);
+            assert_eq!(meta.cuckoo_filter_locs.len(), 2);
 
-            assert_eq!(meta.bloom_filter_locs[0].offset, 0);
-            assert_eq!(meta.bloom_filter_locs[0].element_count, 4);
+            assert_eq!(meta.cuckoo_filter_locs[0].offset, 0);
+            assert_eq!(meta.cuckoo_filter_locs[0].element_count, 4);
             assert_eq!(
-                meta.bloom_filter_locs[1].offset,
-                meta.bloom_filter_locs[0].size
+                meta.cuckoo_filter_locs[1].offset,
+                meta.cuckoo_filter_locs[0].size
             );
-            assert_eq!(meta.bloom_filter_locs[1].element_count, 2);
+            assert_eq!(meta.cuckoo_filter_locs[1].element_count, 2);
         }
     }
 
     #[tokio::test]
-    async fn test_bloom_filter_reader() {
-        let bytes = mock_bloom_filter_bytes().await;
+    async fn test_cuckoo_filter_reader() {
+        let bytes = mock_cuckoo_filter_bytes().await;
 
-        let reader = BloomFilterReaderImpl::new(bytes);
+        let reader = CuckooFilterReaderImpl::new(bytes);
         let meta = reader.metadata().await.unwrap();
 
-        assert_eq!(meta.bloom_filter_locs.len(), 2);
+        assert_eq!(meta.cuckoo_filter_locs.len(), 2);
         let bf = reader
-            .bloom_filter(&meta.bloom_filter_locs[0])
+            .cuckoo_filter(&meta.cuckoo_filter_locs[0])
             .await
             .unwrap();
         assert!(bf.contains(&b"a"));
@@ -298,7 +298,7 @@ mod tests {
         assert!(bf.contains(&b"d"));
 
         let bf = reader
-            .bloom_filter(&meta.bloom_filter_locs[1])
+            .cuckoo_filter(&meta.cuckoo_filter_locs[1])
             .await
             .unwrap();
         assert!(bf.contains(&b"e"));

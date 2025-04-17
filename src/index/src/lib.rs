@@ -16,7 +16,7 @@
 #![feature(assert_matches)]
 
 pub mod bitmap;
-pub mod bloom_filter;
+pub mod cuckoo_filter;
 pub mod error;
 pub mod external_provider;
 pub mod fulltext_index;

@@ -51,8 +51,8 @@ use crate::read::{Batch, Source};
 use crate::region::options::MergeMode;
 use crate::region::version::VersionRef;
 use crate::sst::file::FileHandle;
-use crate::sst::index::bloom_filter::applier::{
-    BloomFilterIndexApplierBuilder, BloomFilterIndexApplierRef,
+use crate::sst::index::cuckoo_filter::applier::{
+    CuckooFilterIndexApplierBuilder, CuckooFilterIndexApplierRef,
 };
 use crate::sst::index::fulltext_index::applier::builder::FulltextIndexApplierBuilder;
 use crate::sst::index::fulltext_index::applier::FulltextIndexApplierRef;
@@ -182,8 +182,8 @@ pub(crate) struct ScanRegion {
     ignore_inverted_index: bool,
     /// Whether to ignore fulltext index.
     ignore_fulltext_index: bool,
-    /// Whether to ignore bloom filter.
-    ignore_bloom_filter: bool,
+    /// Whether to ignore cuckoo filter.
+    ignore_cuckoo_filter: bool,
     /// Start time of the scan task.
     start_time: Option<Instant>,
 }
@@ -204,7 +204,7 @@ impl ScanRegion {
             parallel_scan_channel_size: DEFAULT_SCAN_CHANNEL_SIZE,
             ignore_inverted_index: false,
             ignore_fulltext_index: false,
-            ignore_bloom_filter: false,
+            ignore_cuckoo_filter: false,
             start_time: None,
         }
     }
@@ -233,10 +233,10 @@ impl ScanRegion {
         self
     }
 
-    /// Sets whether to ignore bloom filter.
+    /// Sets whether to ignore cuckoo filter.
     #[must_use]
-    pub(crate) fn with_ignore_bloom_filter(mut self, ignore: bool) -> Self {
-        self.ignore_bloom_filter = ignore;
+    pub(crate) fn with_ignore_cuckoo_filter(mut self, ignore: bool) -> Self {
+        self.ignore_cuckoo_filter = ignore;
         self
     }
 
@@ -349,7 +349,7 @@ impl ScanRegion {
         self.maybe_remove_field_filters();
 
         let inverted_index_applier = self.build_invereted_index_applier();
-        let bloom_filter_applier = self.build_bloom_filter_applier();
+        let cuckoo_filter_applier = self.build_cuckoo_filter_applier();
         let fulltext_index_applier = self.build_fulltext_index_applier();
         let predicate = PredicateGroup::new(&self.version.metadata, &self.request.filters);
         // The mapper always computes projected column ids as the schema of SSTs may change.
@@ -377,7 +377,7 @@ impl ScanRegion {
             .with_files(files)
             .with_cache(self.cache_strategy)
             .with_inverted_index_applier(inverted_index_applier)
-            .with_bloom_filter_index_applier(bloom_filter_applier)
+            .with_cuckoo_filter_index_applier(cuckoo_filter_applier)
             .with_fulltext_index_applier(fulltext_index_applier)
             .with_parallel_scan_channel_size(self.parallel_scan_channel_size)
             .with_start_time(self.start_time)
@@ -468,27 +468,27 @@ impl ScanRegion {
         .map(Arc::new)
     }
 
-    /// Use the latest schema to build the bloom filter index applier.
-    fn build_bloom_filter_applier(&self) -> Option<BloomFilterIndexApplierRef> {
-        if self.ignore_bloom_filter {
+    /// Use the latest schema to build the cuckoo filter index applier.
+    fn build_cuckoo_filter_applier(&self) -> Option<CuckooFilterIndexApplierRef> {
+        if self.ignore_cuckoo_filter {
             return None;
         }
 
         let file_cache = self.cache_strategy.write_cache().map(|w| w.file_cache());
-        let bloom_filter_index_cache = self.cache_strategy.bloom_filter_index_cache().cloned();
+        let cuckoo_filter_index_cache = self.cache_strategy.cuckoo_filter_index_cache().cloned();
         let puffin_metadata_cache = self.cache_strategy.puffin_metadata_cache().cloned();
 
-        BloomFilterIndexApplierBuilder::new(
+        CuckooFilterIndexApplierBuilder::new(
             self.access_layer.region_dir().to_string(),
             self.access_layer.object_store().clone(),
             self.version.metadata.as_ref(),
             self.access_layer.puffin_manager_factory().clone(),
         )
         .with_file_cache(file_cache)
-        .with_bloom_filter_index_cache(bloom_filter_index_cache)
+        .with_cuckoo_filter_index_cache(cuckoo_filter_index_cache)
         .with_puffin_metadata_cache(puffin_metadata_cache)
         .build(&self.request.filters)
-        .inspect_err(|err| warn!(err; "Failed to build bloom filter index applier"))
+        .inspect_err(|err| warn!(err; "Failed to build cuckoo filter index applier"))
         .ok()
         .flatten()
         .map(Arc::new)
@@ -553,7 +553,7 @@ pub(crate) struct ScanInput {
     pub(crate) parallel_scan_channel_size: usize,
     /// Index appliers.
     inverted_index_applier: Option<InvertedIndexApplierRef>,
-    bloom_filter_index_applier: Option<BloomFilterIndexApplierRef>,
+    cuckoo_filter_index_applier: Option<CuckooFilterIndexApplierRef>,
     fulltext_index_applier: Option<FulltextIndexApplierRef>,
     /// Start time of the query.
     pub(crate) query_start: Option<Instant>,
@@ -584,7 +584,7 @@ impl ScanInput {
             ignore_file_not_found: false,
             parallel_scan_channel_size: DEFAULT_SCAN_CHANNEL_SIZE,
             inverted_index_applier: None,
-            bloom_filter_index_applier: None,
+            cuckoo_filter_index_applier: None,
             fulltext_index_applier: None,
             query_start: None,
             append_mode: false,
@@ -657,13 +657,13 @@ impl ScanInput {
         self
     }
 
-    /// Sets bloom filter applier.
+    /// Sets cuckoo filter applier.
     #[must_use]
-    pub(crate) fn with_bloom_filter_index_applier(
+    pub(crate) fn with_cuckoo_filter_index_applier(
         mut self,
-        applier: Option<BloomFilterIndexApplierRef>,
+        applier: Option<CuckooFilterIndexApplierRef>,
     ) -> Self {
-        self.bloom_filter_index_applier = applier;
+        self.cuckoo_filter_index_applier = applier;
         self
     }
 
@@ -771,7 +771,7 @@ impl ScanInput {
             .projection(Some(self.mapper.column_ids().to_vec()))
             .cache(self.cache_strategy.clone())
             .inverted_index_applier(self.inverted_index_applier.clone())
-            .bloom_filter_index_applier(self.bloom_filter_index_applier.clone())
+            .cuckoo_filter_index_applier(self.cuckoo_filter_index_applier.clone())
             .fulltext_index_applier(self.fulltext_index_applier.clone())
             .expected_metadata(Some(self.mapper.metadata().clone()))
             .build_reader_input(reader_metrics)

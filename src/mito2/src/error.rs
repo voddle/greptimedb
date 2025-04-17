@@ -596,8 +596,8 @@ pub enum Error {
     },
 
     #[snafu(display("Failed to apply bloom filter index"))]
-    ApplyBloomFilterIndex {
-        source: index::bloom_filter::error::Error,
+    ApplyCuckooFilterIndex {
+        source: index::cuckoo_filter::error::Error,
         #[snafu(implicit)]
         location: Location,
     },
@@ -983,15 +983,15 @@ pub enum Error {
     },
 
     #[snafu(display("Failed to push value to bloom filter"))]
-    PushBloomFilterValue {
-        source: index::bloom_filter::error::Error,
+    PushCuckooFilterValue {
+        source: index::cuckoo_filter::error::Error,
         #[snafu(implicit)]
         location: Location,
     },
 
     #[snafu(display("Failed to finish bloom filter"))]
-    BloomFilterFinish {
-        source: index::bloom_filter::error::Error,
+    CuckooFilterFinish {
+        source: index::cuckoo_filter::error::Error,
         #[snafu(implicit)]
         location: Location,
     },
@@ -1127,7 +1127,7 @@ impl ErrorExt for Error {
             EmptyRegionDir { .. } | EmptyManifestDir { .. } => StatusCode::RegionNotFound,
             ArrowReader { .. } => StatusCode::StorageUnavailable,
             ConvertValue { source, .. } => source.status_code(),
-            ApplyBloomFilterIndex { source, .. } => source.status_code(),
+            ApplyCuckooFilterIndex { source, .. } => source.status_code(),
             BuildIndexApplier { source, .. }
             | PushIndexValue { source, .. }
             | ApplyInvertedIndex { source, .. }
@@ -1165,7 +1165,7 @@ impl ErrorExt for Error {
 
             DecodeArrowRowGroup { .. } => StatusCode::Internal,
 
-            PushBloomFilterValue { source, .. } | BloomFilterFinish { source, .. } => {
+            PushCuckooFilterValue { source, .. } | CuckooFilterFinish { source, .. } => {
                 source.status_code()
             }
 
