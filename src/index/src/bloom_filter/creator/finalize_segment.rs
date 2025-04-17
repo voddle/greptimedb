@@ -95,7 +95,7 @@ impl FinalizedBloomFilterStorage {
         elems: impl IntoIterator<Item = Bytes>,
         element_count: usize,
     ) -> Result<()> {
-        let mut bf = CuckooFilter::with_capacity(4096);
+        let mut bf = CuckooFilter::with_capacity(element_count);
         for elem in elems.into_iter() {
             bf.add(&elem).unwrap();
             // println!("memory usage: {:?}", bf.memory_usage());
