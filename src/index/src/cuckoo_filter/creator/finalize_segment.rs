@@ -95,20 +95,20 @@ impl FinalizedCuckooFilterStorage {
         elems: impl IntoIterator<Item = Bytes>,
         element_count: usize,
     ) -> Result<()> {
-        let mut bf = CuckooFilter::with_capacity(element_count);
+        let mut cf = CuckooFilter::with_capacity(element_count);
         for elem in elems.into_iter() {
-            bf.add(&elem).unwrap();
+            cf.add(&elem).unwrap();
             // println!("memory usage: {:?}", bf.memory_usage());
             // println!("memory usage size of: {:?}", size_of_val(&bf));
         }
-        println!("memory usage: {:?}", bf.memory_usage());
-        println!("memory usage size of: {:?}", size_of_val(&bf));
+        println!("memory usage: {:?}", cf.memory_usage());
+        println!("memory usage size of: {:?}", size_of_val(&cf));
 
-        let fbf = FinalizedCuckooFilterSegment::from(bf, element_count);
-        println!("fbf memory usage: {:?}", fbf.cuckoo_filter_bytes.len());
+        let fcf = FinalizedCuckooFilterSegment::from(cf, element_count);
+        println!("fbf memory usage: {:?}", fcf.cuckoo_filter_bytes.len());
 
         // Reuse the last segment if it is the same as the current one.
-        if self.in_memory.last() == Some(&fbf) {
+        if self.in_memory.last() == Some(&fcf) {
             self.segment_indices
                 .push(self.flushed_seg_count + self.in_memory.len() - 1);
             return Ok(());
@@ -116,13 +116,13 @@ impl FinalizedCuckooFilterStorage {
         // panic!("checkpoint 1");
 
         // Update memory usage.
-        let memory_diff = fbf.cuckoo_filter_bytes.len();
+        let memory_diff = fcf.cuckoo_filter_bytes.len();
         self.memory_usage += memory_diff;
         self.global_memory_usage
             .fetch_add(memory_diff, Ordering::Relaxed);
 
         // Add the finalized Cuckoo filter to the in-memory storage.
-        self.in_memory.push(fbf);
+        self.in_memory.push(fcf);
         self.segment_indices
             .push(self.flushed_seg_count + self.in_memory.len() - 1);
         // panic!("checkpoint 2");
