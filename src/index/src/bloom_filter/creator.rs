@@ -116,6 +116,7 @@ impl BloomFilterCreator {
         if nrows == 1 {
             return self.push_row_elems(elems).await;
         }
+        println!("rows_per_segment: {:?}", self.rows_per_segment);
 
         let elems = elems.into_iter().collect::<Vec<_>>();
         while nrows > 0 {

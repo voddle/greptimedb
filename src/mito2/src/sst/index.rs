@@ -332,6 +332,7 @@ impl IndexerBuilderImpl {
             OperationType::Flush => self.bloom_filter_index_config.create_on_flush.auto(),
             OperationType::Compact => self.bloom_filter_index_config.create_on_compaction.auto(),
         };
+        println!("create: {:?}", create);
 
         if !create {
             debug!(

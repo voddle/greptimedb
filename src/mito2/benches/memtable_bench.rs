@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use api::v1::value::ValueData;
 use api::v1::{Row, Rows, SemanticType};
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use datafusion_common::Column;
 use datafusion_expr::{lit, Expr};
 use datatypes::data_type::ConcreteDataType;
@@ -54,6 +54,38 @@ fn write_rows(c: &mut Criterion) {
         );
         let kvs =
             memtable_util::build_key_values(&metadata, "hello".to_string(), 42, &timestamps, 1);
+        b.iter(|| {
+            memtable.write(&kvs).unwrap();
+        });
+    });
+    group.bench_function("time_series", |b| {
+        let memtable = TimeSeriesMemtable::new(metadata.clone(), 1, None, true, MergeMode::LastRow);
+        let kvs =
+            memtable_util::build_key_values(&metadata, "hello".to_string(), 42, &timestamps, 1);
+        b.iter(|| {
+            memtable.write(&kvs).unwrap();
+        });
+    });
+}
+
+fn write_rows_throught(c: &mut Criterion) {
+    let metadata = memtable_util::metadata_with_primary_key(vec![1, 0], true);
+    let timestamps = (0..100).collect::<Vec<_>>();
+
+    // Note that this test only generate one time series.
+    let mut group = c.benchmark_group("write");
+    let kvs =
+        memtable_util::build_key_values(&metadata, "hello".to_string(), 42, &timestamps, 1);
+    group.throughput(Throughput::Elements((kvs.num_rows() as u64)));
+    group.bench_function("partition_tree", |b| {
+        let codec = Arc::new(DensePrimaryKeyCodec::new(&metadata));
+        let memtable = PartitionTreeMemtable::new(
+            1,
+            codec,
+            metadata.clone(),
+            None,
+            &PartitionTreeConfig::default(),
+        );
         b.iter(|| {
             memtable.write(&kvs).unwrap();
         });
@@ -359,5 +391,6 @@ fn cpu_metadata() -> RegionMetadata {
     builder.build().unwrap()
 }
 
-criterion_group!(benches, write_rows, full_scan, filter_1_host);
+// criterion_group!(benches, write_rows, write_rows_throught, full_scan, filter_1_host);
+criterion_group!(benches, write_rows_throught);
 criterion_main!(benches);

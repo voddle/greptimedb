@@ -15,6 +15,7 @@
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::fs::OpenOptions;
 
 use asynchronous_codec::{FramedRead, FramedWrite};
 use fastbloom::BloomFilter;
@@ -51,6 +52,9 @@ pub struct FinalizedBloomFilterStorage {
     /// The memory usage of the in-memory Bloom filters.
     memory_usage: usize,
 
+    total_mem_usage: usize,
+
+
     /// The global memory usage provided by the user to track the
     /// total memory usage of the creating Bloom filters.
     global_memory_usage: Arc<AtomicUsize>,
@@ -69,6 +73,18 @@ impl FinalizedBloomFilterStorage {
         global_memory_usage: Arc<AtomicUsize>,
         global_memory_usage_threshold: Option<usize>,
     ) -> Self {
+        let log_file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open("D:\\project\\logs\\bloom_finalize_segment.log")
+            .unwrap();
+
+        let _ = env_logger::Builder::from_default_env()
+            .filter_level(log::LevelFilter::Info)
+            .target(env_logger::Target::Pipe(Box::new(log_file)))
+            .try_init();
+
         let external_prefix = format!("intm-bloom-filters-{}", uuid::Uuid::new_v4());
         Self {
             segment_indices: Vec::new(),
@@ -77,6 +93,7 @@ impl FinalizedBloomFilterStorage {
             intermediate_prefix: external_prefix,
             intermediate_provider,
             memory_usage: 0,
+            total_mem_usage: 0,
             global_memory_usage,
             global_memory_usage_threshold,
             flushed_seg_count: 0,
@@ -115,6 +132,7 @@ impl FinalizedBloomFilterStorage {
         // Update memory usage.
         let memory_diff = fbf.bloom_filter_bytes.len();
         self.memory_usage += memory_diff;
+        self.total_mem_usage += memory_diff;
         self.global_memory_usage
             .fetch_add(memory_diff, Ordering::Relaxed);
 
@@ -212,6 +230,7 @@ impl Drop for FinalizedBloomFilterStorage {
     fn drop(&mut self) {
         self.global_memory_usage
             .fetch_sub(self.memory_usage, Ordering::Relaxed);
+        log::info!("FinalizedBloomFilterStorage::drop, total_mem_usage: {}", self.total_mem_usage);
     }
 }
 
