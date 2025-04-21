@@ -19,7 +19,7 @@ use crate::sst::index::Indexer;
 
 impl Indexer {
     pub(crate) async fn do_update(&mut self, batch: &mut Batch) {
-        println!("update.rs updating!: {:?}", batch.num_rows());
+        // println!("update.rs updating!: {:?}", batch.num_rows());
         if batch.is_empty() {
             return;
         }
@@ -87,9 +87,9 @@ impl Indexer {
 
     /// Returns false if the update failed.
     async fn do_update_bloom_filter(&mut self, batch: &mut Batch) -> bool {
-        println!("update.rs bloom_filter updating!: {:?}", batch.num_rows());
+        // println!("update.rs bloom_filter updating!: {:?}", batch.num_rows());
         let Some(creator) = self.bloom_filter_indexer.as_mut() else {
-            println!("no bloom filter indexer");
+            // println!("no bloom filter indexer");
             return true;
         };
 

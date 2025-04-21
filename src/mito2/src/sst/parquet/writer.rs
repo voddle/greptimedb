@@ -136,7 +136,6 @@ where
     }
 
     async fn get_or_create_indexer(&mut self) -> &mut Indexer {
-        println!("get_or_create_indexer");
         match self.current_indexer {
             None => {
                 self.current_file = FileId::random();

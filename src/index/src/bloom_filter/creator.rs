@@ -110,14 +110,12 @@ impl BloomFilterCreator {
         mut nrows: usize,
         elems: impl IntoIterator<Item = Bytes>,
     ) -> Result<()> {
-        println!("creator.rs inside push_n_row_elems!: {:?}", nrows);
         if nrows == 0 {
             return Ok(());
         }
         if nrows == 1 {
             return self.push_row_elems(elems).await;
         }
-        println!("rows_per_segment: {:?}", self.rows_per_segment);
 
         let elems = elems.into_iter().collect::<Vec<_>>();
         while nrows > 0 {
@@ -152,7 +150,6 @@ impl BloomFilterCreator {
     /// Adds a row of elements to the bloom filter. If the number of accumulated rows
     /// reaches `rows_per_segment`, it finalizes the current segment.
     pub async fn push_row_elems(&mut self, elems: impl IntoIterator<Item = Bytes>) -> Result<()> {
-        println!("creator.rs doing push_row_elems!");
         self.accumulated_row_count += 1;
 
         let mut mem_diff = 0;

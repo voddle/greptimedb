@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use mito2::sst::file::{FileId, FileTimeRange};
@@ -285,33 +286,11 @@ async fn do_something(size: usize) {
         file_path,
     ).await;
 
-    // let prefix = "test_bloom_filter_indexer_";
-    // let tempdir = common_test_util::temp_dir::create_temp_dir(prefix);
-    // let object_store = mock_object_store();
-    // let intm_mgr = new_intm_mgr(tempdir.path().to_string_lossy()).await;
-    // let region_metadata = mock_region_metadata();
-    // let memory_usage_threshold = Some(1024);
-
-    // let mut bloom_indexer = BloomFilterIndexer::new(
-    //     FileId::random(),
-    //     &region_metadata,
-    //     intm_mgr,
-    //     memory_usage_threshold,
-    // )
-    // .unwrap()
-    // .unwrap();
-
-
     // writer.current_indexer.unwrap().bloom_filter_indexer = Some(bloom_indexer);
     let mut batch0 = new_batch("tag1", 0..10);
     let mut batch1 = new_batch("tag1", 0..10);
     let mut batch2 = new_batch("tag2", 0..10000);
     
-    // let source = new_source(&[
-    //     new_batch_by_range(&["a", "d"], 0, size),
-    //     new_batch_by_range(&["b", "f"], 0, size),
-    //     new_batch_by_range(&["b", "h"], 0, size),
-    // ]);
     let source = new_source(&[batch0, batch1, batch2]);
     let write_opts = WriteOptions {
         row_group_size: 50,
@@ -328,71 +307,388 @@ fn larger(c: &mut Criterion) {
 fn from_elem(c: &mut Criterion) {
     let size: usize = 100;
     let mut group = c.benchmark_group("larger");
-    group.measurement_time(Duration::from_secs(30));
+    group.measurement_time(Duration::from_secs(10));
+    group.sample_size(10);
 
-    group.bench_with_input(BenchmarkId::new("input_example", size), &size, |b, &s| {
+    group.bench_with_input(BenchmarkId::new("simple", size), &size, |b, &s| {
         b.to_async(tokio::runtime::Runtime::new().unwrap()).iter(|| do_something(s));
     });
 
-    // group.bench_function("larger", |b| {
-    //     b.to_async(tokio::runtime::Runtime::new().unwrap()).iter(|| async move {
-    //         let mut env = TestEnv::new();
-    //         let handle = sst_file_handle(0, 1000);
-    //         let file_path = FixedPathProvider {
-    //             file_id: handle.file_id(),
-    //         };
-    //         let object_store = env.init_object_store_manager();
-    //         let metadata = Arc::new(sst_region_metadata());
+    group.bench_function("nothing", |b| {
+        b.to_async(tokio::runtime::Runtime::new().unwrap()).iter(|| async move {
+            let mut env = TestEnv::new();
+            let handle = sst_file_handle(0, 1000);
+            let file_path = FixedPathProvider {
+                file_id: handle.file_id(),
+            };
+            let object_store = env.init_object_store_manager();
 
-    //         let mut writer = ParquetWriter::new_with_object_store(
-    //             object_store.clone(),
-    //             metadata.clone(),
-    //             NoopIndexBuilder,
-    //             file_path,
-    //         ).await;
-    //         let source = new_source(&[
-    //             new_batch_by_range(&["a", "d"], 0, 100000),
-    //             new_batch_by_range(&["b", "f"], 0, 100000),
-    //             new_batch_by_range(&["b", "h"], 0, 100000),
-    //         ]);
-    //         let write_opts = WriteOptions {
-    //             row_group_size: 100,
-    //             ..Default::default()
-    //         };
+            let (dir, factory) =
+                PuffinManagerFactory::new_for_test_async("test_build_indexer_basic_").await;
+            let intm_manager = mock_intm_mgr(dir.path().to_string_lossy()).await;
 
-    //         let info = writer.write_all(source, None, &write_opts).await.unwrap().remove(0);
-    //     });
-    // });
+            let metadata = mock_region_metadata(MetaConfig {
+                with_inverted: false,
+                with_fulltext: false,
+                with_skipping_bloom: false,
+            });
 
-    // group.bench_function("larger-key", |b| {
-    //     b.to_async(tokio::runtime::Runtime::new().unwrap()).iter(|| async move {
-    //         let mut env = TestEnv::new();
-    //         let handle = sst_file_handle(0, 1000);
-    //         let file_path = FixedPathProvider {
-    //             file_id: handle.file_id(),
-    //         };
-    //         let object_store = env.init_object_store_manager();
-    //         let metadata = Arc::new(sst_region_metadata());
 
-    //         let mut writer = ParquetWriter::new_with_object_store(
-    //             object_store.clone(),
-    //             metadata.clone(),
-    //             NoopIndexBuilder,
-    //             file_path,
-    //         ).await;
-    //         let source = new_source(&[
-    //             new_batch_by_range(&["a", "d", "yijun"], 0, 100000),
-    //             new_batch_by_range(&["b", "f", "yuang"], 0, 100000),
-    //             new_batch_by_range(&["b", "h", "voddle"], 0, 100000),
-    //         ]);
-    //         let write_opts = WriteOptions {
-    //             row_group_size: 100,
-    //             ..Default::default()
-    //         };
+            let indexer = IndexerBuilderImpl {
+                op_type: OperationType::Flush,
+                metadata: metadata.clone(),
+                row_group_size: 1024,
+                puffin_manager: factory.build(mock_object_store(), TestFilePathProvider),
+                intermediate_manager: intm_manager,
+                index_options: IndexOptions::default(),
+                inverted_index_config: InvertedIndexConfig::default(),
+                fulltext_index_config: FulltextIndexConfig::default(),
+                bloom_filter_index_config: BloomFilterConfig::default(),
+            };
 
-    //         let info = writer.write_all(source, None, &write_opts).await.unwrap().remove(0);
-    //     });
-    // });
+            let mut writer = ParquetWriter::new_with_object_store(
+                object_store.clone(),
+                metadata.clone(),
+                indexer,
+                file_path,
+            ).await;
+            writer.type_id();
+        });
+    });
+
+
+    group.bench_function("large", |b| {
+        b.to_async(tokio::runtime::Runtime::new().unwrap()).iter(|| async move {
+            let mut env = TestEnv::new();
+            let handle = sst_file_handle(0, 1000);
+            let file_path = FixedPathProvider {
+                file_id: handle.file_id(),
+            };
+            let object_store = env.init_object_store_manager();
+
+            let (dir, factory) =
+                PuffinManagerFactory::new_for_test_async("test_build_indexer_basic_").await;
+            let intm_manager = mock_intm_mgr(dir.path().to_string_lossy()).await;
+
+            let metadata = mock_region_metadata(MetaConfig {
+                with_inverted: false,
+                with_fulltext: false,
+                with_skipping_bloom: false,
+            });
+
+
+            let indexer = IndexerBuilderImpl {
+                op_type: OperationType::Flush,
+                metadata: metadata.clone(),
+                row_group_size: 1024,
+                puffin_manager: factory.build(mock_object_store(), TestFilePathProvider),
+                intermediate_manager: intm_manager,
+                index_options: IndexOptions::default(),
+                inverted_index_config: InvertedIndexConfig::default(),
+                fulltext_index_config: FulltextIndexConfig::default(),
+                bloom_filter_index_config: BloomFilterConfig::default(),
+            };
+
+            let mut writer = ParquetWriter::new_with_object_store(
+                object_store.clone(),
+                metadata.clone(),
+                indexer,
+                file_path,
+            ).await;
+
+            // writer.current_indexer.unwrap().bloom_filter_indexer = Some(bloom_indexer);
+            let mut batch0 = new_batch("tag1", 0..10000);
+            let mut batch1 = new_batch("tag1", 0..10000);
+            let mut batch2 = new_batch("tag2", 0..10000);
+            
+            let source = new_source(&[batch0, batch1, batch2]);
+            let write_opts = WriteOptions {
+                row_group_size: 50,
+                ..Default::default()
+            };
+
+            let info = writer.write_all(source, None, &write_opts).await.unwrap();
+
+        });
+    });
+
+
+
+    group.bench_function("larger", |b| {
+        b.to_async(tokio::runtime::Runtime::new().unwrap()).iter(|| async move {
+            let mut env = TestEnv::new();
+            let handle = sst_file_handle(0, 1000);
+            let file_path = FixedPathProvider {
+                file_id: handle.file_id(),
+            };
+            let object_store = env.init_object_store_manager();
+
+            let (dir, factory) =
+                PuffinManagerFactory::new_for_test_async("test_build_indexer_basic_").await;
+            let intm_manager = mock_intm_mgr(dir.path().to_string_lossy()).await;
+
+            let metadata = mock_region_metadata(MetaConfig {
+                with_inverted: false,
+                with_fulltext: false,
+                with_skipping_bloom: false,
+            });
+
+
+            let indexer = IndexerBuilderImpl {
+                op_type: OperationType::Flush,
+                metadata: metadata.clone(),
+                row_group_size: 1024,
+                puffin_manager: factory.build(mock_object_store(), TestFilePathProvider),
+                intermediate_manager: intm_manager,
+                index_options: IndexOptions::default(),
+                inverted_index_config: InvertedIndexConfig::default(),
+                fulltext_index_config: FulltextIndexConfig::default(),
+                bloom_filter_index_config: BloomFilterConfig::default(),
+            };
+
+            let mut writer = ParquetWriter::new_with_object_store(
+                object_store.clone(),
+                metadata.clone(),
+                indexer,
+                file_path,
+            ).await;
+
+            // writer.current_indexer.unwrap().bloom_filter_indexer = Some(bloom_indexer);
+            let mut batch0 = new_batch("tag1", 0..100000);
+            let mut batch1 = new_batch("tag1", 0..100000);
+            let mut batch2 = new_batch("tag2", 0..100000);
+            
+            let source = new_source(&[batch0, batch1, batch2]);
+            let write_opts = WriteOptions {
+                row_group_size: 50,
+                ..Default::default()
+            };
+
+            let info = writer.write_all(source, None, &write_opts).await.unwrap();
+
+        });
+    });
+
+    group.bench_function("small-row-group", |b| {
+        b.to_async(tokio::runtime::Runtime::new().unwrap()).iter(|| async move {
+            let mut env = TestEnv::new();
+            let handle = sst_file_handle(0, 1000);
+            let file_path = FixedPathProvider {
+                file_id: handle.file_id(),
+            };
+            let object_store = env.init_object_store_manager();
+
+            let (dir, factory) =
+                PuffinManagerFactory::new_for_test_async("test_build_indexer_basic_").await;
+            let intm_manager = mock_intm_mgr(dir.path().to_string_lossy()).await;
+
+            let metadata = mock_region_metadata(MetaConfig {
+                with_inverted: false,
+                with_fulltext: false,
+                with_skipping_bloom: false,
+            });
+
+
+            let indexer = IndexerBuilderImpl {
+                op_type: OperationType::Flush,
+                metadata: metadata.clone(),
+                row_group_size: 1024,
+                puffin_manager: factory.build(mock_object_store(), TestFilePathProvider),
+                intermediate_manager: intm_manager,
+                index_options: IndexOptions::default(),
+                inverted_index_config: InvertedIndexConfig::default(),
+                fulltext_index_config: FulltextIndexConfig::default(),
+                bloom_filter_index_config: BloomFilterConfig::default(),
+            };
+
+            let mut writer = ParquetWriter::new_with_object_store(
+                object_store.clone(),
+                metadata.clone(),
+                indexer,
+                file_path,
+            ).await;
+
+            // writer.current_indexer.unwrap().bloom_filter_indexer = Some(bloom_indexer);
+            let mut batch0 = new_batch("tag1", 0..100000);
+            let mut batch1 = new_batch("tag1", 0..100000);
+            let mut batch2 = new_batch("tag2", 0..100000);
+            
+            let source = new_source(&[batch0, batch1, batch2]);
+            let write_opts = WriteOptions {
+                row_group_size: 10,
+                ..Default::default()
+            };
+
+            let info = writer.write_all(source, None, &write_opts).await.unwrap();
+        });
+    });
+
+    group.bench_function("large-row-group", |b| {
+        b.to_async(tokio::runtime::Runtime::new().unwrap()).iter(|| async move {
+            let mut env = TestEnv::new();
+            let handle = sst_file_handle(0, 1000);
+            let file_path = FixedPathProvider {
+                file_id: handle.file_id(),
+            };
+            let object_store = env.init_object_store_manager();
+
+            let (dir, factory) =
+                PuffinManagerFactory::new_for_test_async("test_build_indexer_basic_").await;
+            let intm_manager = mock_intm_mgr(dir.path().to_string_lossy()).await;
+
+            let metadata = mock_region_metadata(MetaConfig {
+                with_inverted: false,
+                with_fulltext: false,
+                with_skipping_bloom: false,
+            });
+
+
+            let indexer = IndexerBuilderImpl {
+                op_type: OperationType::Flush,
+                metadata: metadata.clone(),
+                row_group_size: 1024,
+                puffin_manager: factory.build(mock_object_store(), TestFilePathProvider),
+                intermediate_manager: intm_manager,
+                index_options: IndexOptions::default(),
+                inverted_index_config: InvertedIndexConfig::default(),
+                fulltext_index_config: FulltextIndexConfig::default(),
+                bloom_filter_index_config: BloomFilterConfig::default(),
+            };
+
+            let mut writer = ParquetWriter::new_with_object_store(
+                object_store.clone(),
+                metadata.clone(),
+                indexer,
+                file_path,
+            ).await;
+
+            // writer.current_indexer.unwrap().bloom_filter_indexer = Some(bloom_indexer);
+            let mut batch0 = new_batch("tag1", 0..100000);
+            let mut batch1 = new_batch("tag1", 0..100000);
+            let mut batch2 = new_batch("tag2", 0..100000);
+            
+            let source = new_source(&[batch0, batch1, batch2]);
+            let write_opts = WriteOptions {
+                row_group_size: 1000,
+                ..Default::default()
+            };
+
+            let info = writer.write_all(source, None, &write_opts).await.unwrap();
+        });
+    });
+
+
+
+    group.bench_function("less-larger-key", |b| {
+        b.to_async(tokio::runtime::Runtime::new().unwrap()).iter(|| async move {
+            let mut env = TestEnv::new();
+            let handle = sst_file_handle(0, 1000);
+            let file_path = FixedPathProvider {
+                file_id: handle.file_id(),
+            };
+            let object_store = env.init_object_store_manager();
+
+            let (dir, factory) =
+                PuffinManagerFactory::new_for_test_async("test_build_indexer_basic_").await;
+            let intm_manager = mock_intm_mgr(dir.path().to_string_lossy()).await;
+
+            let metadata = mock_region_metadata(MetaConfig {
+                with_inverted: false,
+                with_fulltext: false,
+                with_skipping_bloom: false,
+            });
+
+
+            let indexer = IndexerBuilderImpl {
+                op_type: OperationType::Flush,
+                metadata: metadata.clone(),
+                row_group_size: 1024,
+                puffin_manager: factory.build(mock_object_store(), TestFilePathProvider),
+                intermediate_manager: intm_manager,
+                index_options: IndexOptions::default(),
+                inverted_index_config: InvertedIndexConfig::default(),
+                fulltext_index_config: FulltextIndexConfig::default(),
+                bloom_filter_index_config: BloomFilterConfig::default(),
+            };
+
+            let mut writer = ParquetWriter::new_with_object_store(
+                object_store.clone(),
+                metadata.clone(),
+                indexer,
+                file_path,
+            ).await;
+
+            // writer.current_indexer.unwrap().bloom_filter_indexer = Some(bloom_indexer);
+            let mut batch0 = new_batch("voddle", 0..1000);
+            let mut batch1 = new_batch("voddle", 0..1000);
+            let mut batch2 = new_batch("IamSoTired", 0..1000);
+            
+            let source = new_source(&[batch0, batch1, batch2]);
+            let write_opts = WriteOptions {
+                row_group_size: 50,
+                ..Default::default()
+            };
+
+            let info = writer.write_all(source, None, &write_opts).await.unwrap();
+
+        });
+    });
+
+
+    group.bench_function("more-larger-key", |b| {
+        b.to_async(tokio::runtime::Runtime::new().unwrap()).iter(|| async move {
+            let mut env = TestEnv::new();
+            let handle = sst_file_handle(0, 1000);
+            let file_path = FixedPathProvider {
+                file_id: handle.file_id(),
+            };
+            let object_store = env.init_object_store_manager();
+
+            let (dir, factory) =
+                PuffinManagerFactory::new_for_test_async("test_build_indexer_basic_").await;
+            let intm_manager = mock_intm_mgr(dir.path().to_string_lossy()).await;
+
+            let metadata = mock_region_metadata(MetaConfig {
+                with_inverted: false,
+                with_fulltext: false,
+                with_skipping_bloom: false,
+            });
+
+
+            let indexer = IndexerBuilderImpl {
+                op_type: OperationType::Flush,
+                metadata: metadata.clone(),
+                row_group_size: 1024,
+                puffin_manager: factory.build(mock_object_store(), TestFilePathProvider),
+                intermediate_manager: intm_manager,
+                index_options: IndexOptions::default(),
+                inverted_index_config: InvertedIndexConfig::default(),
+                fulltext_index_config: FulltextIndexConfig::default(),
+                bloom_filter_index_config: BloomFilterConfig::default(),
+            };
+
+            let mut writer = ParquetWriter::new_with_object_store(
+                object_store.clone(),
+                metadata.clone(),
+                indexer,
+                file_path,
+            ).await;
+
+            // writer.current_indexer.unwrap().bloom_filter_indexer = Some(bloom_indexer);
+            let mut batch0 = new_batch("voddle", 0..100000);
+            let mut batch1 = new_batch("voddle", 0..100000);
+            let mut batch2 = new_batch("IamSoTired", 0..100000);
+            
+            let source = new_source(&[batch0, batch1, batch2]);
+            let write_opts = WriteOptions {
+                row_group_size: 50,
+                ..Default::default()
+            };
+
+            let info = writer.write_all(source, None, &write_opts).await.unwrap();
+
+        });
+    });
 
 }
 
