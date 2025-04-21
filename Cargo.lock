@@ -3860,6 +3860,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "env_logger"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4cd405aab171cb85d6735e5c8d9db038c17d3ca007a4d2c25f337935c3d90580"
+dependencies = [
+ "humantime",
+ "is-terminal",
+ "log",
+ "regex",
+ "termcolor",
+]
+
+[[package]]
 name = "equator"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5579,12 +5592,14 @@ dependencies = [
  "common-telemetry",
  "common-test-util",
  "cuckoofilter",
+ "env_logger",
  "fastbloom",
  "fst",
  "futures",
  "greptime-proto",
  "itertools 0.14.0",
  "jieba-rs",
+ "log",
  "mockall",
  "pin-project",
  "prost 0.13.3",
