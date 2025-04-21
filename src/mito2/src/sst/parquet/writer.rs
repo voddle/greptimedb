@@ -59,7 +59,7 @@ pub struct ParquetWriter<F: WriterFactory, I: IndexerBuilder, P: FilePathProvide
     /// Indexer build that can create indexer for multiple files.
     indexer_builder: I,
     /// Current active indexer.
-    current_indexer: Option<Indexer>,
+    pub current_indexer: Option<Indexer>,
     bytes_written: Arc<AtomicUsize>,
 }
 

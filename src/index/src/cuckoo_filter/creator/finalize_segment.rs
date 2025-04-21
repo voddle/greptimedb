@@ -117,11 +117,11 @@ impl FinalizedCuckooFilterStorage {
             // println!("memory usage: {:?}", bf.memory_usage());
             // println!("memory usage size of: {:?}", size_of_val(&bf));
         }
-        println!("memory usage: {:?}", cf.memory_usage());
-        println!("memory usage size of: {:?}", size_of_val(&cf));
+        // println!("memory usage: {:?}", cf.memory_usage());
+        // println!("memory usage size of: {:?}", size_of_val(&cf));
 
         let fcf = FinalizedCuckooFilterSegment::from(cf, element_count);
-        println!("fbf memory usage: {:?}", fcf.cuckoo_filter_bytes.len());
+        // println!("fcf memory usage: {:?}", fcf.cuckoo_filter_bytes.len());
 
         // Reuse the last segment if it is the same as the current one.
         if self.in_memory.last() == Some(&fcf) {
@@ -233,7 +233,7 @@ impl Drop for FinalizedCuckooFilterStorage {
     fn drop(&mut self) {
         self.global_memory_usage
             .fetch_sub(self.memory_usage, Ordering::Relaxed);
-        log::info!("FinalizedBloomFilterStorage::drop, total_mem_usage: {}", self.total_mem_usage);
+        log::info!("FinalizedCuckooFilterStorage::drop, total_mem_usage: {}", self.total_mem_usage);
     }
 }
 
