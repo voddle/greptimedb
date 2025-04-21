@@ -2,24 +2,40 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use mito2::sst::file::{FileId, FileTimeRange};
 use mito2::sst::parquet::writer::ParquetWriter;
-use mito2::test_util::memtable_util::{self, region_metadata_to_row_schema};
-use mito2::memtable::{KeyValues, Memtable};
-use mito2::memtable::time_series::TimeSeriesMemtable;
-use mito2::region::options::{MergeMode, IndexOptions};
-use mito2::row_converter::DensePrimaryKeyCodec;
 use mito2::test_util::sst_util::{sst_file_handle, new_batch_by_range, new_source, sst_region_metadata};
-use mito2::test_util::{check_reader_result, TestEnv};
+use mito2::test_util::{TestEnv};
 use mito2::access_layer::FilePathProvider;
-use common_base::readable_size::ReadableSize;
 use parquet::file::metadata::ParquetMetaData;
 use mito2::sst::index::IndexOutput;
 use mito2::sst::parquet::WriteOptions;
+use mito2::sst::index::IndexerBuilderImpl;
+use mito2::region::options::IndexOptions;
+use mito2::config::{IndexConfig, InvertedIndexConfig, FulltextIndexConfig, BloomFilterConfig};
+use mito2::sst::index::puffin_manager::PuffinManagerFactory;
+use mito2::sst::index::intermediate::IntermediateManager;
+use object_store::ObjectStore;
+use object_store::services::Memory;
+use mito2::access_layer::OperationType;
+use store_api::metadata::RegionMetadataRef;
+use store_api::storage::{ColumnId, RegionId};
+use datatypes::schema::{
+    ColumnSchema, FulltextOptions, SkippingIndexOptions, SkippingIndexType,
+};
+use datatypes::data_type::ConcreteDataType;
+use api::v1::SemanticType;
+use store_api::metadata::{ColumnMetadata, RegionMetadataBuilder};
+use mito2::read::BatchColumn;
+use mito2::row_converter::{DensePrimaryKeyCodec, PrimaryKeyCodecExt};
+use mito2::row_converter::SortField;
+use datatypes::value::ValueRef;
+use datatypes::vectors::{UInt64Vector, UInt8Vector, TimestampMillisecondVector};
+use mito2::read::Batch;
+use std::iter;
 // use mito2::sst::parquet::{FixedPathProvider, SstInfo};
 
 use criterion::BenchmarkId;
 use criterion::Criterion;
 use criterion::{criterion_group, criterion_main};
-use criterion::async_executor::FuturesExecutor;
 
 mod memory_store;
 
@@ -50,12 +66,44 @@ impl FilePathProvider for FixedPathProvider {
     }
 }
 
+struct TestFilePathProvider;
+
+impl FilePathProvider for TestFilePathProvider {
+    fn build_index_file_path(&self, file_id: FileId) -> String {
+        file_id.to_string()
+    }
+
+    fn build_sst_file_path(&self, file_id: FileId) -> String {
+        file_id.to_string()
+    }
+}
+
 struct NoopIndexBuilder;
 
 #[async_trait::async_trait]
 impl IndexerBuilder for NoopIndexBuilder {
     async fn build(&self, _file_id: FileId) -> Indexer {
         Indexer::default()
+    }
+}
+
+async fn mock_intm_mgr(path: impl AsRef<str>) -> IntermediateManager {
+    IntermediateManager::init_fs(path).await.unwrap()
+}
+
+fn mock_object_store() -> ObjectStore {
+    ObjectStore::new(Memory::default()).unwrap().finish()
+}
+
+struct NoopPathProvider;
+
+impl FilePathProvider for NoopPathProvider {
+    fn build_index_file_path(&self, _file_id: FileId) -> String {
+        unreachable!()
+    }
+
+    fn build_sst_file_path(&self, _file_id: FileId) -> String {
+        unreachable!()
     }
 }
 
@@ -78,7 +126,125 @@ pub struct SstInfo {
     pub index_metadata: IndexOutput,
 }
 
+struct MetaConfig {
+    with_inverted: bool,
+    with_fulltext: bool,
+    with_skipping_bloom: bool,
+}
 
+fn mock_region_metadata(
+    MetaConfig {
+        with_inverted,
+        with_fulltext,
+        with_skipping_bloom,
+    }: MetaConfig,
+) -> RegionMetadataRef {
+    let mut builder = RegionMetadataBuilder::new(RegionId::new(1, 2));
+    let mut column_schema = ColumnSchema::new("tag_str", ConcreteDataType::string_datatype(), false);
+    if with_inverted {
+        column_schema = column_schema.with_inverted_index(true);
+    }
+    builder
+        .push_column_metadata(ColumnMetadata {
+            column_schema: column_schema
+            .with_skipping_options(SkippingIndexOptions {
+                index_type: SkippingIndexType::BloomFilter,
+                granularity: 50,
+            })
+            .unwrap(),
+            semantic_type: SemanticType::Tag,
+            column_id: 1,
+        })
+        .push_column_metadata(ColumnMetadata {
+            column_schema: ColumnSchema::new(
+                "ts", 
+                ConcreteDataType::timestamp_millisecond_datatype(), 
+                false),
+            semantic_type: SemanticType::Timestamp,
+            column_id: 2,
+        })
+        .push_column_metadata(ColumnMetadata {
+            column_schema: ColumnSchema::new(
+                "field_u64",
+                ConcreteDataType::uint64_datatype(),
+                false,
+            )
+            .with_skipping_options(SkippingIndexOptions {
+                index_type: SkippingIndexType::BloomFilter,
+                granularity: 50,
+            })
+            .unwrap(),
+            semantic_type: SemanticType::Field,
+            column_id: 3,
+        })
+        .primary_key(vec![1]);
+
+    if with_fulltext {
+        let column_schema =
+            ColumnSchema::new("text", ConcreteDataType::string_datatype(), true)
+                .with_fulltext_options(FulltextOptions {
+                    enable: true,
+                    ..Default::default()
+                })
+                .unwrap();
+
+        let column = ColumnMetadata {
+            column_schema,
+            semantic_type: SemanticType::Field,
+            column_id: 4,
+        };
+
+        builder.push_column_metadata(column);
+    }
+
+    if with_skipping_bloom {
+        let column_schema =
+            ColumnSchema::new("bloom", ConcreteDataType::string_datatype(), false)
+                .with_skipping_options(SkippingIndexOptions {
+                    granularity: 42,
+                    index_type: SkippingIndexType::BloomFilter,
+                })
+                .unwrap();
+
+        let column = ColumnMetadata {
+            column_schema,
+            semantic_type: SemanticType::Field,
+            column_id: 5,
+        };
+
+        builder.push_column_metadata(column);
+    }
+
+    Arc::new(builder.build().unwrap())
+}
+
+pub fn new_batch(str_tag: impl AsRef<str>, u64_field: impl IntoIterator<Item = u64>) -> Batch {
+    let fields = vec![(0, SortField::new(ConcreteDataType::string_datatype()))];
+    let codec = DensePrimaryKeyCodec::with_fields(fields);
+    let row: [ValueRef; 1] = [str_tag.as_ref().into()];
+    let primary_key = codec.encode(row.into_iter()).unwrap();
+
+    let u64_field = BatchColumn {
+        column_id: 3,
+        data: Arc::new(UInt64Vector::from_iter_values(u64_field)),
+    };
+    let num_rows = u64_field.data.len();
+
+    Batch::new(
+        primary_key,
+        Arc::new(TimestampMillisecondVector::from_iter_values(
+            iter::repeat(0).take(num_rows),
+        )),
+        Arc::new(UInt64Vector::from_iter_values(
+            iter::repeat(0).take(num_rows),
+        )),
+        Arc::new(UInt8Vector::from_iter_values(
+            iter::repeat(1).take(num_rows),
+        )),
+        vec![u64_field],
+    )
+    .unwrap()
+}
 
 
 async fn do_something(size: usize) {
@@ -88,19 +254,65 @@ async fn do_something(size: usize) {
         file_id: handle.file_id(),
     };
     let object_store = env.init_object_store_manager();
-    let metadata = Arc::new(sst_region_metadata());
+
+    let (dir, factory) =
+        PuffinManagerFactory::new_for_test_async("test_build_indexer_basic_").await;
+    let intm_manager = mock_intm_mgr(dir.path().to_string_lossy()).await;
+
+    let metadata = mock_region_metadata(MetaConfig {
+        with_inverted: false,
+        with_fulltext: false,
+        with_skipping_bloom: false,
+    });
+
+
+    let indexer = IndexerBuilderImpl {
+        op_type: OperationType::Flush,
+        metadata: metadata.clone(),
+        row_group_size: 1024,
+        puffin_manager: factory.build(mock_object_store(), TestFilePathProvider),
+        intermediate_manager: intm_manager,
+        index_options: IndexOptions::default(),
+        inverted_index_config: InvertedIndexConfig::default(),
+        fulltext_index_config: FulltextIndexConfig::default(),
+        bloom_filter_index_config: BloomFilterConfig::default(),
+    };
 
     let mut writer = ParquetWriter::new_with_object_store(
         object_store.clone(),
         metadata.clone(),
-        NoopIndexBuilder,
+        indexer,
         file_path,
     ).await;
-    let source = new_source(&[
-        new_batch_by_range(&["a", "d"], 0, size),
-        new_batch_by_range(&["b", "f"], 0, size),
-        new_batch_by_range(&["b", "h"], 0, size),
-    ]);
+
+    // let prefix = "test_bloom_filter_indexer_";
+    // let tempdir = common_test_util::temp_dir::create_temp_dir(prefix);
+    // let object_store = mock_object_store();
+    // let intm_mgr = new_intm_mgr(tempdir.path().to_string_lossy()).await;
+    // let region_metadata = mock_region_metadata();
+    // let memory_usage_threshold = Some(1024);
+
+    // let mut bloom_indexer = BloomFilterIndexer::new(
+    //     FileId::random(),
+    //     &region_metadata,
+    //     intm_mgr,
+    //     memory_usage_threshold,
+    // )
+    // .unwrap()
+    // .unwrap();
+
+
+    // writer.current_indexer.unwrap().bloom_filter_indexer = Some(bloom_indexer);
+    let mut batch0 = new_batch("tag1", 0..10);
+    let mut batch1 = new_batch("tag1", 0..10);
+    let mut batch2 = new_batch("tag2", 0..10000);
+    
+    // let source = new_source(&[
+    //     new_batch_by_range(&["a", "d"], 0, size),
+    //     new_batch_by_range(&["b", "f"], 0, size),
+    //     new_batch_by_range(&["b", "h"], 0, size),
+    // ]);
+    let source = new_source(&[batch0, batch1, batch2]);
     let write_opts = WriteOptions {
         row_group_size: 50,
         ..Default::default()
@@ -115,70 +327,72 @@ fn larger(c: &mut Criterion) {
 
 fn from_elem(c: &mut Criterion) {
     let size: usize = 100;
+    let mut group = c.benchmark_group("larger");
+    group.measurement_time(Duration::from_secs(30));
 
-    c.bench_with_input(BenchmarkId::new("input_example", size), &size, |b, &s| {
+    group.bench_with_input(BenchmarkId::new("input_example", size), &size, |b, &s| {
         b.to_async(tokio::runtime::Runtime::new().unwrap()).iter(|| do_something(s));
     });
 
-    c.bench_function("larger", |b| {
-        b.to_async(tokio::runtime::Runtime::new().unwrap()).iter(|| async move {
-            let mut env = TestEnv::new();
-            let handle = sst_file_handle(0, 1000);
-            let file_path = FixedPathProvider {
-                file_id: handle.file_id(),
-            };
-            let object_store = env.init_object_store_manager();
-            let metadata = Arc::new(sst_region_metadata());
+    // group.bench_function("larger", |b| {
+    //     b.to_async(tokio::runtime::Runtime::new().unwrap()).iter(|| async move {
+    //         let mut env = TestEnv::new();
+    //         let handle = sst_file_handle(0, 1000);
+    //         let file_path = FixedPathProvider {
+    //             file_id: handle.file_id(),
+    //         };
+    //         let object_store = env.init_object_store_manager();
+    //         let metadata = Arc::new(sst_region_metadata());
 
-            let mut writer = ParquetWriter::new_with_object_store(
-                object_store.clone(),
-                metadata.clone(),
-                NoopIndexBuilder,
-                file_path,
-            ).await;
-            let source = new_source(&[
-                new_batch_by_range(&["a", "d"], 0, 100000),
-                new_batch_by_range(&["b", "f"], 0, 100000),
-                new_batch_by_range(&["b", "h"], 0, 100000),
-            ]);
-            let write_opts = WriteOptions {
-                row_group_size: 100,
-                ..Default::default()
-            };
+    //         let mut writer = ParquetWriter::new_with_object_store(
+    //             object_store.clone(),
+    //             metadata.clone(),
+    //             NoopIndexBuilder,
+    //             file_path,
+    //         ).await;
+    //         let source = new_source(&[
+    //             new_batch_by_range(&["a", "d"], 0, 100000),
+    //             new_batch_by_range(&["b", "f"], 0, 100000),
+    //             new_batch_by_range(&["b", "h"], 0, 100000),
+    //         ]);
+    //         let write_opts = WriteOptions {
+    //             row_group_size: 100,
+    //             ..Default::default()
+    //         };
 
-            let info = writer.write_all(source, None, &write_opts).await.unwrap().remove(0);
-        });
-    });
+    //         let info = writer.write_all(source, None, &write_opts).await.unwrap().remove(0);
+    //     });
+    // });
 
-    c.bench_function("larger-key", |b| {
-        b.to_async(tokio::runtime::Runtime::new().unwrap()).iter(|| async move {
-            let mut env = TestEnv::new();
-            let handle = sst_file_handle(0, 1000);
-            let file_path = FixedPathProvider {
-                file_id: handle.file_id(),
-            };
-            let object_store = env.init_object_store_manager();
-            let metadata = Arc::new(sst_region_metadata());
+    // group.bench_function("larger-key", |b| {
+    //     b.to_async(tokio::runtime::Runtime::new().unwrap()).iter(|| async move {
+    //         let mut env = TestEnv::new();
+    //         let handle = sst_file_handle(0, 1000);
+    //         let file_path = FixedPathProvider {
+    //             file_id: handle.file_id(),
+    //         };
+    //         let object_store = env.init_object_store_manager();
+    //         let metadata = Arc::new(sst_region_metadata());
 
-            let mut writer = ParquetWriter::new_with_object_store(
-                object_store.clone(),
-                metadata.clone(),
-                NoopIndexBuilder,
-                file_path,
-            ).await;
-            let source = new_source(&[
-                new_batch_by_range(&["a", "d", "yijun"], 0, 100000),
-                new_batch_by_range(&["b", "f", "yuang"], 0, 100000),
-                new_batch_by_range(&["b", "h", "voddle"], 0, 100000),
-            ]);
-            let write_opts = WriteOptions {
-                row_group_size: 100,
-                ..Default::default()
-            };
+    //         let mut writer = ParquetWriter::new_with_object_store(
+    //             object_store.clone(),
+    //             metadata.clone(),
+    //             NoopIndexBuilder,
+    //             file_path,
+    //         ).await;
+    //         let source = new_source(&[
+    //             new_batch_by_range(&["a", "d", "yijun"], 0, 100000),
+    //             new_batch_by_range(&["b", "f", "yuang"], 0, 100000),
+    //             new_batch_by_range(&["b", "h", "voddle"], 0, 100000),
+    //         ]);
+    //         let write_opts = WriteOptions {
+    //             row_group_size: 100,
+    //             ..Default::default()
+    //         };
 
-            let info = writer.write_all(source, None, &write_opts).await.unwrap().remove(0);
-        });
-    });
+    //         let info = writer.write_all(source, None, &write_opts).await.unwrap().remove(0);
+    //     });
+    // });
 
 }
 

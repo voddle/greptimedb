@@ -59,7 +59,7 @@ pub struct ParquetWriter<F: WriterFactory, I: IndexerBuilder, P: FilePathProvide
     /// Indexer build that can create indexer for multiple files.
     indexer_builder: I,
     /// Current active indexer.
-    current_indexer: Option<Indexer>,
+    pub current_indexer: Option<Indexer>,
     bytes_written: Arc<AtomicUsize>,
 }
 
@@ -136,6 +136,7 @@ where
     }
 
     async fn get_or_create_indexer(&mut self) -> &mut Indexer {
+        println!("get_or_create_indexer");
         match self.current_indexer {
             None => {
                 self.current_file = FileId::random();
@@ -144,7 +145,9 @@ where
                 // safety: self.current_indexer already set above.
                 self.current_indexer.as_mut().unwrap()
             }
-            Some(ref mut indexer) => indexer,
+            Some(ref mut indexer) => {
+                indexer
+            }
         }
     }
 

@@ -128,6 +128,7 @@ impl BloomFilterIndexer {
     ///
     /// TODO(zhongzc): duplicate with `mito2::sst::index::inverted_index::creator::InvertedIndexCreator`
     pub async fn update(&mut self, batch: &mut Batch) -> Result<()> {
+        println!("creator.rs updating!: {:?}", batch.num_rows());
         ensure!(!self.aborted, OperateAbortedIndexSnafu);
 
         if self.creators.is_empty() {
@@ -194,11 +195,13 @@ impl BloomFilterIndexer {
 
         let n = batch.num_rows();
         guard.inc_row_count(n);
+        println!("creator.rs doing do_update!: {:?}", n);
 
         for (col_id, creator) in &mut self.creators {
             match self.codec.pk_col_info(*col_id) {
                 // tags
                 Some(col_info) => {
+                    println!("got some col_info");
                     let pk_idx = col_info.idx;
                     let field = &col_info.field;
                     let elems = batch
@@ -214,6 +217,7 @@ impl BloomFilterIndexer {
                             Ok(buf)
                         })
                         .transpose()?;
+                    println!("creator.rs push_n_row_elems!: {:?}", n);
                     creator
                         .push_n_row_elems(n, elems)
                         .await
@@ -221,7 +225,9 @@ impl BloomFilterIndexer {
                 }
                 // fields
                 None => {
+                    println!("no col_info: {:?}", col_id);
                     let Some(values) = batch.field_col_value(*col_id) else {
+                        println!("no values");
                         debug!(
                             "Column {} not found in the batch during building bloom filter index",
                             col_id
@@ -243,6 +249,7 @@ impl BloomFilterIndexer {
                             })
                             .transpose()?;
 
+                        println!("no value pushing row elems");
                         creator
                             .push_row_elems(elems)
                             .await

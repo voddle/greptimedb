@@ -81,7 +81,7 @@ impl PuffinManagerFactory {
         })
     }
 
-    pub(crate) fn build(
+    pub fn build(
         &self,
         store: ObjectStore,
         path_provider: impl FilePathProvider + 'static,
@@ -100,9 +100,8 @@ impl PuffinManagerFactory {
     }
 }
 
-#[cfg(test)]
 impl PuffinManagerFactory {
-    pub(crate) async fn new_for_test_async(
+    pub async fn new_for_test_async(
         prefix: &str,
     ) -> (common_test_util::temp_dir::TempDir, Self) {
         let tempdir = common_test_util::temp_dir::create_temp_dir(prefix);
@@ -124,7 +123,7 @@ impl PuffinManagerFactory {
 
 /// A `PuffinFileAccessor` implementation that uses an object store as the underlying storage.
 #[derive(Clone)]
-pub(crate) struct ObjectStorePuffinFileAccessor {
+pub struct ObjectStorePuffinFileAccessor {
     object_store: InstrumentedStore,
     path_provider: Arc<dyn FilePathProvider>,
 }

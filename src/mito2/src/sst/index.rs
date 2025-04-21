@@ -111,7 +111,7 @@ pub struct Indexer {
     last_mem_inverted_index: usize,
     fulltext_indexer: Option<FulltextIndexer>,
     last_mem_fulltext_index: usize,
-    bloom_filter_indexer: Option<BloomFilterIndexer>,
+    pub bloom_filter_indexer: Option<BloomFilterIndexer>,
     last_mem_bloom_filter: usize,
 }
 
@@ -174,16 +174,16 @@ pub trait IndexerBuilder {
     async fn build(&self, file_id: FileId) -> Indexer;
 }
 
-pub(crate) struct IndexerBuilderImpl {
-    pub(crate) op_type: OperationType,
-    pub(crate) metadata: RegionMetadataRef,
-    pub(crate) row_group_size: usize,
-    pub(crate) puffin_manager: SstPuffinManager,
-    pub(crate) intermediate_manager: IntermediateManager,
-    pub(crate) index_options: IndexOptions,
-    pub(crate) inverted_index_config: InvertedIndexConfig,
-    pub(crate) fulltext_index_config: FulltextIndexConfig,
-    pub(crate) bloom_filter_index_config: BloomFilterConfig,
+pub struct IndexerBuilderImpl {
+    pub op_type: OperationType,
+    pub metadata: RegionMetadataRef,
+    pub row_group_size: usize,
+    pub puffin_manager: SstPuffinManager,
+    pub intermediate_manager: IntermediateManager,
+    pub index_options: IndexOptions,
+    pub inverted_index_config: InvertedIndexConfig,
+    pub fulltext_index_config: FulltextIndexConfig,
+    pub bloom_filter_index_config: BloomFilterConfig,
 }
 
 #[async_trait::async_trait]
@@ -332,8 +332,7 @@ impl IndexerBuilderImpl {
             OperationType::Flush => self.bloom_filter_index_config.create_on_flush.auto(),
             OperationType::Compact => self.bloom_filter_index_config.create_on_compaction.auto(),
         };
-        println!("create: {:?}", create);
-
+        
         if !create {
             debug!(
                 "Skip creating bloom filter due to config, region_id: {}, file_id: {}",
