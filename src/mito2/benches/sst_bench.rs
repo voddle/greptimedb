@@ -383,7 +383,7 @@ fn from_elem(c: &mut Criterion) {
     });
 
 
-    let key_type = false;
+    let key_type = true;
     let row_group_size = 64;
     let test_config_set: Vec<TestConfig> = vec![
         TestConfig {
