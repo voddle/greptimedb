@@ -30,7 +30,7 @@ use mito2::row_converter::{DensePrimaryKeyCodec, PrimaryKeyCodecExt};
 use mito2::row_converter::SortField;
 use datatypes::value::ValueRef;
 use datatypes::vectors::{UInt64Vector, UInt8Vector, TimestampMillisecondVector};
-use mito2::read::Batch;
+use mito2::read::{Batch, Source};
 use std::iter;
 // use mito2::sst::parquet::{FixedPathProvider, SstInfo};
 
@@ -132,6 +132,13 @@ struct MetaConfig {
     with_skipping_bloom: bool,
 }
 
+#[derive(Debug, Copy, Clone, Default)]
+struct TestConfig {
+    batch_size: u64,
+    row_group_size: usize,
+    large_key: bool,
+}
+
 fn mock_region_metadata(
     MetaConfig {
         with_inverted,
@@ -229,6 +236,7 @@ pub fn new_batch(str_tag: impl AsRef<str>, u64_field: impl IntoIterator<Item = u
         data: Arc::new(UInt64Vector::from_iter_values(u64_field)),
     };
     let num_rows = u64_field.data.len();
+
 
     Batch::new(
         primary_key,
@@ -339,6 +347,23 @@ async fn get_test_writer() -> ParquetWriter<ObjectStoreWriterFactory, IndexerBui
 
 }
 
+fn new_test_source(batch_size: u64, large_key: bool) -> (Source, usize) {
+    let mut batch0;
+    let mut batch1;
+    let mut batch2;
+    if large_key {
+        batch0 = new_batch("voddle", 0..batch_size);
+        batch1 = new_batch("voddle", 0..batch_size);
+        batch2 = new_batch("IamSoTired", 0..batch_size);
+    } else {
+        batch0 = new_batch("tag1", 0..batch_size);
+        batch1 = new_batch("tag1", 0..batch_size);
+        batch2 = new_batch("tag2", 0..batch_size);
+    }
+    let size = batch0.memory_size() + batch1.memory_size() + batch2.memory_size();
+    (new_source(&[batch0, batch1, batch2]), size)
+}
+
 
 fn from_elem(c: &mut Criterion) {
     let size: usize = 100;
@@ -358,447 +383,151 @@ fn from_elem(c: &mut Criterion) {
     });
 
 
-    group.bench_function("small-key-10000", |b| {
-        b.to_async(tokio::runtime::Runtime::new().unwrap()).iter(|| async move {
-            let mut env = TestEnv::new();
-            let handle = sst_file_handle(0, 1000);
-            let file_path = FixedPathProvider {
-                file_id: handle.file_id(),
-            };
-            let object_store = env.init_object_store_manager();
+    let key_type = false;
+    let row_group_size = 64;
+    let test_config_set: Vec<TestConfig> = vec![
+        TestConfig {
+            batch_size: 1000,
+            row_group_size: row_group_size,
+            large_key: key_type,
+        },
+        TestConfig {
+            batch_size: 5000,
+            row_group_size: row_group_size,
+            large_key: key_type,
+        },
+        TestConfig {
+            batch_size: 10000,
+            row_group_size: row_group_size,
+            large_key: key_type,
+        },
+        TestConfig {
+            batch_size: 50000,
+            row_group_size: row_group_size,
+            large_key: key_type,
+        },
+        TestConfig {
+            batch_size: 100000,
+            row_group_size: row_group_size,
+            large_key: key_type,
+        },
+        TestConfig {
+            batch_size: 500000,
+            row_group_size: row_group_size,
+            large_key: key_type,
+        },
+        TestConfig {
+            batch_size: 1000,
+            row_group_size: row_group_size * 4,
+            large_key: key_type,
+        },
+        TestConfig {
+            batch_size: 5000,
+            row_group_size: row_group_size * 4,
+            large_key: key_type,
+        },
+        TestConfig {
+            batch_size: 10000,
+            row_group_size: row_group_size * 4,
+            large_key: key_type,
+        },
+        TestConfig {
+            batch_size: 50000,
+            row_group_size: row_group_size * 4,
+            large_key: key_type,
+        },
+        TestConfig {
+            batch_size: 100000,
+            row_group_size: row_group_size * 4,
+            large_key: key_type,
+        },
+        TestConfig {
+            batch_size: 500000,
+            row_group_size: row_group_size * 4,
+            large_key: key_type,
+        },
+        TestConfig {
+            batch_size: 1000000,
+            row_group_size: row_group_size * 4,
+            large_key: key_type,
+        },
+        TestConfig {
+            batch_size: 1000,
+            row_group_size: row_group_size * 16,
+            large_key: key_type,
+        },
+        TestConfig {
+            batch_size: 5000,
+            row_group_size: row_group_size * 16,
+            large_key: key_type,
+        },
+        TestConfig {
+            batch_size: 10000,
+            row_group_size: row_group_size * 16,
+            large_key: key_type,
+        },
+        TestConfig {
+            batch_size: 50000,
+            row_group_size: row_group_size * 16,
+            large_key: key_type,
+        },
+        TestConfig {
+            batch_size: 100000,
+            row_group_size: row_group_size * 16,
+            large_key: key_type,
+        },
+        TestConfig {
+            batch_size: 500000,
+            row_group_size: row_group_size * 16,
+            large_key: key_type,
+        },
+        TestConfig {
+            batch_size: 1000000,
+            row_group_size: row_group_size * 16,
+            large_key: key_type,
+        },
+    ];
+    for test_config in test_config_set {
+        let (_, size) = new_test_source(test_config.batch_size, test_config.large_key);
+        group.throughput(criterion::Throughput::Bytes(size as u64));
+        group.bench_with_input(format!("row-{}-key-{}", test_config.row_group_size, test_config.batch_size), &test_config, |b, test_config| {
+            b.to_async(tokio::runtime::Runtime::new().unwrap()).iter_with_setup(|| new_test_source(test_config.batch_size, test_config.large_key), |(source, _)| async move {
+                let mut writer = get_test_writer().await;
 
-            let (dir, factory) =
-                PuffinManagerFactory::new_for_test_async("test_build_indexer_basic_").await;
-            let intm_manager = mock_intm_mgr(dir.path().to_string_lossy()).await;
+                let (source, _) = new_test_source(test_config.batch_size, test_config.large_key);
+                let write_opts = WriteOptions {
+                    row_group_size: test_config.row_group_size,
+                    ..Default::default()
+                };
 
-            let metadata = mock_region_metadata(MetaConfig {
-                with_inverted: false,
-                with_fulltext: false,
-                with_skipping_bloom: false,
+                let info = writer.write_all(source, None, &write_opts).await.unwrap();
             });
-
-
-            let indexer = IndexerBuilderImpl {
-                op_type: OperationType::Flush,
-                metadata: metadata.clone(),
-                row_group_size: 1024,
-                puffin_manager: factory.build(mock_object_store(), TestFilePathProvider),
-                intermediate_manager: intm_manager,
-                index_options: IndexOptions::default(),
-                inverted_index_config: InvertedIndexConfig::default(),
-                fulltext_index_config: FulltextIndexConfig::default(),
-                cuckoo_filter_index_config: CuckooFilterConfig::default(),
-            };
-
-            let mut writer = ParquetWriter::new_with_object_store(
-                object_store.clone(),
-                metadata.clone(),
-                indexer,
-                file_path,
-            ).await;
-
-            // writer.current_indexer.unwrap().bloom_filter_indexer = Some(bloom_indexer);
-            let mut batch0 = new_batch("tag1", 0..10000);
-            let mut batch1 = new_batch("tag1", 0..10000);
-            let mut batch2 = new_batch("tag2", 0..10000);
-
-            let source = new_source(&[batch0, batch1, batch2]);
-            let write_opts = WriteOptions {
-                row_group_size: 50,
-                ..Default::default()
-            };
-
-            let info = writer.write_all(source, None, &write_opts).await.unwrap();
-
         });
-    });
+    }
+
+    // let test_config = TestConfig {
+    //     batch_size: 1000,
+    //     row_group_size: 10,
+    //     large_key: key_type,
+    // };
+
+
+    // let (_, size) = new_test_source(test_config.batch_size, test_config.large_key);
+    // group.throughput(criterion::Throughput::Bytes(size as u64));
+    // group.bench_with_input(format!("row-{}-key-{}", test_config.row_group_size, test_config.batch_size), &test_config, |b, test_config| {
+    //     b.to_async(tokio::runtime::Runtime::new().unwrap()).iter_with_setup(|| new_test_source(test_config.batch_size, test_config.large_key), |(source, _)| async move {
+    //         let mut writer = get_test_writer().await;
+
+    //         let (source, _) = new_test_source(test_config.batch_size, test_config.large_key);
+    //         let write_opts = WriteOptions {
+    //             row_group_size: test_config.row_group_size,
+    //             ..Default::default()
+    //         };
+
+    //         let info = writer.write_all(source, None, &write_opts).await.unwrap();
+    //     });
+    // });
 
-
-
-    group.bench_function("small-key-100000", |b| {
-        b.to_async(tokio::runtime::Runtime::new().unwrap()).iter(|| async move {
-            let mut env = TestEnv::new();
-            let handle = sst_file_handle(0, 1000);
-            let file_path = FixedPathProvider {
-                file_id: handle.file_id(),
-            };
-            let object_store = env.init_object_store_manager();
-
-            let (dir, factory) =
-                PuffinManagerFactory::new_for_test_async("test_build_indexer_basic_").await;
-            let intm_manager = mock_intm_mgr(dir.path().to_string_lossy()).await;
-
-            let metadata = mock_region_metadata(MetaConfig {
-                with_inverted: false,
-                with_fulltext: false,
-                with_skipping_bloom: false,
-            });
-
-
-            let indexer = IndexerBuilderImpl {
-                op_type: OperationType::Flush,
-                metadata: metadata.clone(),
-                row_group_size: 1024,
-                puffin_manager: factory.build(mock_object_store(), TestFilePathProvider),
-                intermediate_manager: intm_manager,
-                index_options: IndexOptions::default(),
-                inverted_index_config: InvertedIndexConfig::default(),
-                fulltext_index_config: FulltextIndexConfig::default(),
-                cuckoo_filter_index_config: CuckooFilterConfig::default(),
-            };
-
-            let mut writer = ParquetWriter::new_with_object_store(
-                object_store.clone(),
-                metadata.clone(),
-                indexer,
-                file_path,
-            ).await;
-
-            // writer.current_indexer.unwrap().bloom_filter_indexer = Some(bloom_indexer);
-            let mut batch0 = new_batch("tag1", 0..100000);
-            let mut batch1 = new_batch("tag1", 0..100000);
-            let mut batch2 = new_batch("tag2", 0..100000);
-
-            let source = new_source(&[batch0, batch1, batch2]);
-            let write_opts = WriteOptions {
-                row_group_size: 50,
-                ..Default::default()
-            };
-
-            let info = writer.write_all(source, None, &write_opts).await.unwrap();
-
-        });
-    });
-
-    group.bench_function("small-row-group-10", |b| {
-        b.to_async(tokio::runtime::Runtime::new().unwrap()).iter(|| async move {
-            let mut env = TestEnv::new();
-            let handle = sst_file_handle(0, 1000);
-            let file_path = FixedPathProvider {
-                file_id: handle.file_id(),
-            };
-            let object_store = env.init_object_store_manager();
-
-            let (dir, factory) =
-                PuffinManagerFactory::new_for_test_async("test_build_indexer_basic_").await;
-            let intm_manager = mock_intm_mgr(dir.path().to_string_lossy()).await;
-
-            let metadata = mock_region_metadata(MetaConfig {
-                with_inverted: false,
-                with_fulltext: false,
-                with_skipping_bloom: false,
-            });
-
-
-            let indexer = IndexerBuilderImpl {
-                op_type: OperationType::Flush,
-                metadata: metadata.clone(),
-                row_group_size: 1024,
-                puffin_manager: factory.build(mock_object_store(), TestFilePathProvider),
-                intermediate_manager: intm_manager,
-                index_options: IndexOptions::default(),
-                inverted_index_config: InvertedIndexConfig::default(),
-                fulltext_index_config: FulltextIndexConfig::default(),
-                cuckoo_filter_index_config: CuckooFilterConfig::default(),
-            };
-
-            let mut writer = ParquetWriter::new_with_object_store(
-                object_store.clone(),
-                metadata.clone(),
-                indexer,
-                file_path,
-            ).await;
-
-            // writer.current_indexer.unwrap().bloom_filter_indexer = Some(bloom_indexer);
-            let mut batch0 = new_batch("tag1", 0..100000);
-            let mut batch1 = new_batch("tag1", 0..100000);
-            let mut batch2 = new_batch("tag2", 0..100000);
-
-            let source = new_source(&[batch0, batch1, batch2]);
-            let write_opts = WriteOptions {
-                row_group_size: 10,
-                ..Default::default()
-            };
-
-            let info = writer.write_all(source, None, &write_opts).await.unwrap();
-        });
-    });
-
-    group.bench_function("large-row-group-1000", |b| {
-        b.to_async(tokio::runtime::Runtime::new().unwrap()).iter(|| async move {
-            let mut env = TestEnv::new();
-            let handle = sst_file_handle(0, 1000);
-            let file_path = FixedPathProvider {
-                file_id: handle.file_id(),
-            };
-            let object_store = env.init_object_store_manager();
-
-            let (dir, factory) =
-                PuffinManagerFactory::new_for_test_async("test_build_indexer_basic_").await;
-            let intm_manager = mock_intm_mgr(dir.path().to_string_lossy()).await;
-
-            let metadata = mock_region_metadata(MetaConfig {
-                with_inverted: false,
-                with_fulltext: false,
-                with_skipping_bloom: false,
-            });
-
-
-            let indexer = IndexerBuilderImpl {
-                op_type: OperationType::Flush,
-                metadata: metadata.clone(),
-                row_group_size: 1024,
-                puffin_manager: factory.build(mock_object_store(), TestFilePathProvider),
-                intermediate_manager: intm_manager,
-                index_options: IndexOptions::default(),
-                inverted_index_config: InvertedIndexConfig::default(),
-                fulltext_index_config: FulltextIndexConfig::default(),
-                cuckoo_filter_index_config: CuckooFilterConfig::default(),
-            };
-
-            let mut writer = ParquetWriter::new_with_object_store(
-                object_store.clone(),
-                metadata.clone(),
-                indexer,
-                file_path,
-            ).await;
-
-            // writer.current_indexer.unwrap().bloom_filter_indexer = Some(bloom_indexer);
-            let mut batch0 = new_batch("tag1", 0..100000);
-            let mut batch1 = new_batch("tag1", 0..100000);
-            let mut batch2 = new_batch("tag2", 0..100000);
-
-            let source = new_source(&[batch0, batch1, batch2]);
-            let write_opts = WriteOptions {
-                row_group_size: 1000,
-                ..Default::default()
-            };
-
-            let info = writer.write_all(source, None, &write_opts).await.unwrap();
-        });
-    });
-
-    group.bench_function("larger-key-10000-10", |b| {
-        b.to_async(tokio::runtime::Runtime::new().unwrap()).iter(|| async move {
-            let mut env = TestEnv::new();
-            let handle = sst_file_handle(0, 1000);
-            let file_path = FixedPathProvider {
-                file_id: handle.file_id(),
-            };
-            let object_store = env.init_object_store_manager();
-
-            let (dir, factory) =
-                PuffinManagerFactory::new_for_test_async("test_build_indexer_basic_").await;
-            let intm_manager = mock_intm_mgr(dir.path().to_string_lossy()).await;
-
-            let metadata = mock_region_metadata(MetaConfig {
-                with_inverted: false,
-                with_fulltext: false,
-                with_skipping_bloom: false,
-            });
-
-
-            let indexer = IndexerBuilderImpl {
-                op_type: OperationType::Flush,
-                metadata: metadata.clone(),
-                row_group_size: 1024,
-                puffin_manager: factory.build(mock_object_store(), TestFilePathProvider),
-                intermediate_manager: intm_manager,
-                index_options: IndexOptions::default(),
-                inverted_index_config: InvertedIndexConfig::default(),
-                fulltext_index_config: FulltextIndexConfig::default(),
-                cuckoo_filter_index_config: CuckooFilterConfig::default(),
-            };
-
-            let mut writer = ParquetWriter::new_with_object_store(
-                object_store.clone(),
-                metadata.clone(),
-                indexer,
-                file_path,
-            ).await;
-
-            // writer.current_indexer.unwrap().bloom_filter_indexer = Some(bloom_indexer);
-            let mut batch0 = new_batch("voddle", 0..10000);
-            let mut batch1 = new_batch("voddle", 0..10000);
-            let mut batch2 = new_batch("IamSoTired", 0..10000);
-
-            let source = new_source(&[batch0, batch1, batch2]);
-            let write_opts = WriteOptions {
-                row_group_size: 10,
-                ..Default::default()
-            };
-
-            let info = writer.write_all(source, None, &write_opts).await.unwrap();
-
-        });
-    });
-
-
-    group.bench_function("larger-key-10000-50", |b| {
-        b.to_async(tokio::runtime::Runtime::new().unwrap()).iter(|| async move {
-            let mut env = TestEnv::new();
-            let handle = sst_file_handle(0, 1000);
-            let file_path = FixedPathProvider {
-                file_id: handle.file_id(),
-            };
-            let object_store = env.init_object_store_manager();
-
-            let (dir, factory) =
-                PuffinManagerFactory::new_for_test_async("test_build_indexer_basic_").await;
-            let intm_manager = mock_intm_mgr(dir.path().to_string_lossy()).await;
-
-            let metadata = mock_region_metadata(MetaConfig {
-                with_inverted: false,
-                with_fulltext: false,
-                with_skipping_bloom: false,
-            });
-
-
-            let indexer = IndexerBuilderImpl {
-                op_type: OperationType::Flush,
-                metadata: metadata.clone(),
-                row_group_size: 1024,
-                puffin_manager: factory.build(mock_object_store(), TestFilePathProvider),
-                intermediate_manager: intm_manager,
-                index_options: IndexOptions::default(),
-                inverted_index_config: InvertedIndexConfig::default(),
-                fulltext_index_config: FulltextIndexConfig::default(),
-                cuckoo_filter_index_config: CuckooFilterConfig::default(),
-            };
-
-            let mut writer = ParquetWriter::new_with_object_store(
-                object_store.clone(),
-                metadata.clone(),
-                indexer,
-                file_path,
-            ).await;
-
-            // writer.current_indexer.unwrap().bloom_filter_indexer = Some(bloom_indexer);
-            let mut batch0 = new_batch("voddle", 0..10000);
-            let mut batch1 = new_batch("voddle", 0..10000);
-            let mut batch2 = new_batch("IamSoTired", 0..10000);
-
-            let source = new_source(&[batch0, batch1, batch2]);
-            let write_opts = WriteOptions {
-                row_group_size: 50,
-                ..Default::default()
-            };
-
-            let info = writer.write_all(source, None, &write_opts).await.unwrap();
-
-        });
-    });
-
-    group.bench_function("larger-key-100000-10", |b| {
-        b.to_async(tokio::runtime::Runtime::new().unwrap()).iter(|| async move {
-            let mut env = TestEnv::new();
-            let handle = sst_file_handle(0, 1000);
-            let file_path = FixedPathProvider {
-                file_id: handle.file_id(),
-            };
-            let object_store = env.init_object_store_manager();
-
-            let (dir, factory) =
-                PuffinManagerFactory::new_for_test_async("test_build_indexer_basic_").await;
-            let intm_manager = mock_intm_mgr(dir.path().to_string_lossy()).await;
-
-            let metadata = mock_region_metadata(MetaConfig {
-                with_inverted: false,
-                with_fulltext: false,
-                with_skipping_bloom: false,
-            });
-
-
-            let indexer = IndexerBuilderImpl {
-                op_type: OperationType::Flush,
-                metadata: metadata.clone(),
-                row_group_size: 1024,
-                puffin_manager: factory.build(mock_object_store(), TestFilePathProvider),
-                intermediate_manager: intm_manager,
-                index_options: IndexOptions::default(),
-                inverted_index_config: InvertedIndexConfig::default(),
-                fulltext_index_config: FulltextIndexConfig::default(),
-                cuckoo_filter_index_config: CuckooFilterConfig::default(),
-            };
-
-            let mut writer = ParquetWriter::new_with_object_store(
-                object_store.clone(),
-                metadata.clone(),
-                indexer,
-                file_path,
-            ).await;
-
-            // writer.current_indexer.unwrap().bloom_filter_indexer = Some(bloom_indexer);
-            let mut batch0 = new_batch("voddle", 0..100000);
-            let mut batch1 = new_batch("voddle", 0..100000);
-            let mut batch2 = new_batch("IamSoTired", 0..100000);
-
-            let source = new_source(&[batch0, batch1, batch2]);
-            let write_opts = WriteOptions {
-                row_group_size: 10,
-                ..Default::default()
-            };
-
-            let info = writer.write_all(source, None, &write_opts).await.unwrap();
-
-        });
-    });
-
-
-    group.bench_function("larger-key-100000-50", |b| {
-        b.to_async(tokio::runtime::Runtime::new().unwrap()).iter(|| async move {
-            let mut env = TestEnv::new();
-            let handle = sst_file_handle(0, 1000);
-            let file_path = FixedPathProvider {
-                file_id: handle.file_id(),
-            };
-            let object_store = env.init_object_store_manager();
-
-            let (dir, factory) =
-                PuffinManagerFactory::new_for_test_async("test_build_indexer_basic_").await;
-            let intm_manager = mock_intm_mgr(dir.path().to_string_lossy()).await;
-
-            let metadata = mock_region_metadata(MetaConfig {
-                with_inverted: false,
-                with_fulltext: false,
-                with_skipping_bloom: false,
-            });
-
-
-            let indexer = IndexerBuilderImpl {
-                op_type: OperationType::Flush,
-                metadata: metadata.clone(),
-                row_group_size: 1024,
-                puffin_manager: factory.build(mock_object_store(), TestFilePathProvider),
-                intermediate_manager: intm_manager,
-                index_options: IndexOptions::default(),
-                inverted_index_config: InvertedIndexConfig::default(),
-                fulltext_index_config: FulltextIndexConfig::default(),
-                cuckoo_filter_index_config: CuckooFilterConfig::default(),
-            };
-
-            let mut writer = ParquetWriter::new_with_object_store(
-                object_store.clone(),
-                metadata.clone(),
-                indexer,
-                file_path,
-            ).await;
-
-            // writer.current_indexer.unwrap().bloom_filter_indexer = Some(bloom_indexer);
-            let mut batch0 = new_batch("voddle", 0..100000);
-            let mut batch1 = new_batch("voddle", 0..100000);
-            let mut batch2 = new_batch("IamSoTired", 0..100000);
-
-            let source = new_source(&[batch0, batch1, batch2]);
-            let write_opts = WriteOptions {
-                row_group_size: 50,
-                ..Default::default()
-            };
-
-            let info = writer.write_all(source, None, &write_opts).await.unwrap();
-
-        });
-    });
 
 }
 
